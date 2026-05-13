@@ -1,2 +1,17 @@
+name = "Akta"
+uuid = "f5a23b8e-4c19-4d2b-b8f3-9e7c1d5a2043"
+version = "0.1.0"
+
 [deps]
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+GLMakie = "e9467ef8-e4e7-5192-8a1a-b1aee30e663a"
 LibSerialPort = "a05a14c7-6e3b-5ba9-90a2-45558833e1df"
+Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
+Observables = "510215fc-4207-5dde-b226-833fc4488ee2"
+Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
+
+[compat]
+Dates = "1.11.0"
+GLMakie = "0.13.10"
+Logging = "1.11.0"
+Printf = "1.11.0"
