@@ -122,16 +122,32 @@ sequenceDiagram
     end
 ```
 
-#### Open questions
+#### Open questions / unresolved
 
 - Whether `0x8001` and `0x8002` arrive as separate I-frames or are combined
-  in a single frame. The `buildTxFrame` loop processes up to 3 messages and
-  respects a 0x27-byte encoded length limit; the Akta's equivalent behaviour
-  is unknown.
-- Whether the Akta begins sending `0x2001` trend data before or after
-  `0x1001/0x01` is received.
+  in a single frame.
 - The exact byte content of the `0x75` connection response beyond the ctrl
-  byte (checksum value not yet reconstructed).
+  byte.
+- pH (`0x2001` CH 2) scale factor — no pH electrode in test system.
+- Pressure (`0x2001` CH 5) physical units (MPa, bar, or other).
+- %B (`0x2001` CH 3) maximum raw value and whether it can exceed 1000
+  (10-bit field → max 1023 raw → 102.3% if ÷10).
+- Initial valve and instrument state: embedded in the `.met` method dump
+  (OPCs `0x2007`/`0x8008`/`0x8011`/`0x2008`); `.met` file format not yet
+  reversed.
+
+#### Confirmed from physical testing (2025-05)
+
+- `0x1001/0x00` → `0x8001` (programme name) → `0x8002` (version) → 
+  `0x1001/0x01` handshake sequence confirmed end-to-end.
+- Trend data streams immediately after `0x1001/0x01`.
+- UV ÷ 1,000,000 matches front-panel reading.
+- COND ÷ 1,000 → mS/cm matches front-panel reading.
+- TEMP (CH 4): (raw − 100) ÷ 10 → °C matches front-panel reading (2.5°C).
+- %B (CH 3): ÷ 10 → % confirmed (106 raw = 10.6 %B observed).
+- vol_delta (`0x2001` data[2]): unit is 10 µL per count (÷100 → mL).
+- Connection termination: PC simply closes the serial port; no disconnect
+  frame is sent.
 
 ---
 
@@ -268,14 +284,30 @@ become `0x01`.
 
 OPC dispatch (decoded frames arriving from Akta via RX_UPLOADX):
 
-| OPC | Handler | Action |
+| OPC | Handler | Description |
 |---|---|---|
-| `0x8001` | `handleProgramIdentity` | Stores programme name in `g_szProgramName` |
-| `0x8002` | `handleProgramIdentity` | Stores version string in `g_szVersionString`; sets `g_nVersionReceived=1` |
-| `0x2001` | `handleTrendData` | Increments base time/volume; packages sensor readings to ONLINEX |
-| `0x2002` | inline | Sets `g_nBaseTime`, `g_nBaseVolume` |
-| `0x2003` | `handleRunState` | Decodes run state; writes `0x3ea` event to ONLINEX |
-| `0x2004`/`0x2005` | `handleInjectTubefeed` | Records inject/tubefeed event |
+| `0x8001` | `handleProgramIdentity` | Programme name (ASCII) |
+| `0x8002` | `handleProgramIdentity` | Version string (ASCII); sets `g_nVersionReceived=1` |
+| `0x2001` | `handleTrendData` | Increments base time/volume; packages 6 sensor channels to ONLINEX |
+| `0x2002` | inline in `handleTrendData` | Sets absolute `g_nBaseTime`, `g_nBaseVolume` |
+| `0x2003` | `handleRunState` | Run state + time/volume; writes `0x3ea` event to ONLINEX |
+| `0x2004` | `handleInjectTubefeed` | Injection valve event with timestamp and volume |
+| `0x2005` | `handleInjectTubefeed` | Tube-feed event with timestamp, volume, and tube number |
+| `0x2006` | `handleLogMessage` | Step base time and volume (resets per step) |
+| `0x2007` | `handleMethodDumpOpc` | Begin method dump: opens temp `.met` file |
+| `0x2008` (nob=1) | `handleMethodDumpOpc` | End method dump: closes file, notifies ONLINEX |
+| `0x2009` | `handleMethodDumpOpc` | Begin method save: opens temp file for write |
+| `0x2010` | `handleMethodDumpOpc` | Finalise method save: copy temp → permanent, notify ONLINEX |
+| `0x3001` | (none) | Watchdog / keepalive; silently dropped |
+| `0x8003` | `handleDebugMessage` | ASCII debug string from firmware |
+| `0x8004` | `handleLogMessage` | Single-frame log message (emit immediately) |
+| `0x8005` | `handleLogMessage` | First frame of multi-frame log (buffer, hold) |
+| `0x8006` | `handleLogMessage` | Middle frame of multi-frame log (append, hold) |
+| `0x8007` | `handleLogMessage` | Final frame of multi-frame log (append, emit) |
+| `0x8008` | `handleMethodDumpOpc` | Single-frame method data block (write immediately to file) |
+| `0x8009` | `handleMethodDumpOpc` | First frame of multi-frame method block (buffer, hold) |
+| `0x8010` | `handleMethodDumpOpc` | Middle frame of multi-frame method block (append, hold) |
+| `0x8011` | `handleMethodDumpOpc` | Final frame of multi-frame method block (append, write to file) |
 
 ---
 
@@ -508,60 +540,70 @@ then decodes data bytes. Dispatches on OPC:
 | OPC | Handler |
 |---|---|
 | `0x2001` | `handleTrendData` |
-| `0x2002` | stores `g_nBaseTime` @ `0x0041806c`, `g_nBaseVolume` @ `0x00418070` |
+| `0x2002` | `handleTrendData` (inline branch) — sets `g_nBaseTime`, `g_nBaseVolume` |
 | `0x2003` | `handleRunState` |
 | `0x2004` / `0x2005` | `handleInjectTubefeed` |
-| `0x8001` | `handleProgramIdentity` -- stores programme name in `g_szProgramName` |
-| `0x8002` | `handleProgramIdentity` -- stores version string in `g_szVersionString`; sets `g_nVersionReceived=1` |
-| `0x8003` | appends to log message buffer; posts to ONLINEX on `0x800c` |
-| `0xfffd` | debug string, calls `logError` |
+| `0x2006` | `handleLogMessage` — step time/volume |
+| `0x2007`/`0x2008`/`0x2009`/`0x2010` | `handleMethodDumpOpc` — method file transfer |
+| `0x3001` | (dropped — watchdog keepalive) |
+| `0x8001` | `handleProgramIdentity` — stores programme name in `g_szProgramName` |
+| `0x8002` | `handleProgramIdentity` — stores version string; sets `g_nVersionReceived=1` |
+| `0x8003` | `handleDebugMessage` — ASCII debug string with `~`/`}` escapes |
+| `0x8004`–`0x8007` | `handleLogMessage` — single/begin/middle/end log message frames |
+| `0x8008`–`0x8011` | `handleMethodDumpOpc` — method file data frames |
 
 ---
 
 **`handleTrendData`** @ `0x004030a0`
 
-Receives decoded binary payload (pointer `pDecodedFrame`, offset from OPC
-start). Payload byte offsets below are from OPC start (+4 = first data
-byte):
+Handles both `0x2001` (incremental trend) and `0x2002` (absolute base
+time/volume). For `0x2001` (nob=14), payload byte offsets are from data
+start:
 
 ```c
-// g_nBaseTime += time_delta
-g_nBaseTime += *(byte*)(pDecodedFrame + 4)     // payload[0]
+// g_nBaseTime += time_delta (units: 10ms)
+g_nBaseTime += data[1]
 
-// g_nBaseVolume += volume_delta
-g_nBaseVolume += *(byte*)(pDecodedFrame + 5)   // payload[1]
+// g_nBaseVolume += vol_delta (units: 10µL)
+g_nBaseVolume += data[2]
 
-// UV: 24-bit signed, payload[2..4]
-uv_raw = (p[8]<<16 | p[7]<<8 | p[6])
-if p[8] & 0x80: uv_raw |= 0xFF000000           // sign extend
+// CH 0 UV: 24-bit signed LE, data[3..5]
+uv_raw = data[5]<<16 | data[4]<<8 | data[3]
+if data[5] & 0x80: uv_raw |= 0xFF000000       // sign extend to 32-bit
 
-// Conductivity: 24-bit unsigned, payload[5..7]
-cond_raw = p[11]<<16 | p[10]<<8 | p[9]
+// CH 1 COND: 24-bit unsigned LE, data[6..8]
+cond_raw = data[8]<<16 | data[7]<<8 | data[6]
 
-// pH: 11-bit, payload[8..9]
-ph_raw = (p[13] & 0x07) << 8 | p[12]
+// CH 2 PH: 11-bit, packed across data[9..10]
+ph_raw = (data[10] & 0x07) << 8 | data[9]
 
-// Temperature: 10-bit, payload[9..10]
-temp_raw = (p[14] & 0x1f) << 5 | (p[13] >> 3)
+// CH 3 B (%B): 10-bit, packed across data[10..11]
+pctb_raw = (data[11] & 0x1f) << 5 | (data[10] >> 3)
 
-// Pressure: 11-bit, payload[10..11]
-press_raw = p[15] * 8 + (p[14] >> 5)
+// CH 5 PRES: 11-bit, packed across data[11..12]
+pres_raw = data[12] << 3 | (data[11] >> 5)
 
-// Flow/inject: 11-bit, payload[12..13], bias -100
-flow_raw = (p[17] & 0x07) << 8 | p[16]
-flow_biased = flow_raw - 100
+// CH 4 TEMP: 11-bit, packed across data[13..14], bias -100
+temp_raw = ((data[14] & 0x07) << 8 | data[13]) - 100
 ```
 
-Each channel calls `packageSensorReading(channelIdx, rawValue, scaleCode,
-hOnlineMailslot)`.
+For `0x2002` (nob=8), sets `g_nBaseTime` and `g_nBaseVolume` absolutely
+from two 32-bit LE values.
 
-Channel index to scale_code mapping:
-- 0 (UV): scale 6
-- 1 (COND): scale 3
-- 2 (PH): scale 2
-- 3 (TEMP): scale 1
-- 4 (flow/inject): scale 1
-- 5 (PRESS): scale 3
+Channel table confirmed from `packageSensorReading` channel array at
+`0x004130d4` (10-byte entries, `name_ptr` at entry+4):
+
+| Ch idx | Name | Raw encoding | Confirmed scaling |
+|--------|------|-------------|-------------------|
+| 0 | UV   | 24-bit signed LE | ÷1,000,000 |
+| 1 | COND | 24-bit unsigned LE | ÷1,000 → mS/cm |
+| 2 | PH   | 11-bit | unknown (no pH electrode in test system) |
+| 3 | B    | 10-bit | ÷10 → %B |
+| 4 | TEMP | 11-bit, bias −100 | ÷10 → °C |
+| 5 | PRES | 11-bit | ÷1,000 (units TBC) |
+
+`scaleCode` passed to `packageSensorReading`: 6 (UV), 3 (COND), 2 (PH),
+1 (B), 1 (TEMP), 3 (PRES).
 
 ---
 
@@ -588,24 +630,27 @@ write to ONLINEX mailslot (type 0x3eb, size 0x11a)
 
 **`handleRunState`** @ `0x00403340`
 
-Decodes `0x2003` payload. Payload byte offsets from data start:
+Decodes `0x2003` payload (nob=10). Payload byte offsets from data start:
 
 ```c
-run_time   = (p[2]<<16 | p[1]<<8 | p[0]) / 10    // ms
-run_volume = (p[5]<<16 | p[4]<<8 | p[3]) / 10    // µl
-
-state_byte = p[6]
-// state_byte → oci_state_code mapping:
-// 0 → 6, 1 → 2, 2 → 3, 3 → 4, 4 → 5
-
-// g_nRunStateFlags:
-// state 1 (Run) or 4 (Continue): g_nRunStateFlags = 1
-// state 0 (End):                 g_nRunStateFlags = 0
-// state 2 (Pause):               g_nRunStateFlags = 4
-// state 3 (Hold):                g_nRunStateFlags = 5
-
-inject_active = *(byte*)(pDecodedFrame + 0xd)    // byte offset 13 from OPC
+run_time   = data[3]<<16 | data[2]<<8 | data[1]  // 24-bit LE; data[4] = padding
+run_volume = data[7]<<16 | data[6]<<8 | data[5]  // 24-bit LE; data[8] = padding
+state_byte = data[9]
+inject_active = data[10]
 ```
+
+state_byte values and `g_nRunStateFlags` mapping:
+
+| data[9] | State | OCI code | g_nRunStateFlags |
+|---------|-------|----------|-----------------|
+| 0 | End | 6 | 0 |
+| 1 | Run | 2 | 1 |
+| 2 | Pause | 3 | 4 |
+| 3 | Hold | 4 | 5 |
+| 4 | Continue | 5 | 1 |
+
+Units: run_time in 10ms counts (same as `g_nBaseTime`); run_volume in 10µL
+counts. The ONLINEX struct uses `÷10` on the raw values.
 
 Builds 0xda-byte struct, writes to ONLINEX (type `0x3ea`).
 
@@ -613,15 +658,27 @@ Builds 0xda-byte struct, writes to ONLINEX (type `0x3ea`).
 
 **`handleInjectTubefeed`** @ `0x004035e0`
 
-Handles both `0x2004` (inject) and `0x2005` (tubefeed).
+Handles `0x2004` (inject, nob=8) and `0x2005` (tubefeed, nob=10).
 
+Both frames share the same time/volume header:
 ```c
-inject_time   = (p[3]<<24 | p[2]<<16 | p[1]<<8 | p[0]) / 10   // ms
-inject_volume = (p[7]<<16 | p[6]<<8  | p[5]) / 10              // µl
-
-// For 0x2005 only:
-tube_params = p[9]<<8 | p[8]
+event_time   = data[4]<<24 | data[3]<<16 | data[2]<<8 | data[1]  // 32-bit LE, 10ms units
+event_volume = data[7]<<16 | data[6]<<8  | data[5]                // 24-bit LE, 10µL units
 ```
+
+Note: the injection valve name (Waste/Inj/Load) is **not** encoded in the
+binary OPC. It is conveyed by the accompanying `0x8004`–`0x8007` log
+message ("Injection Valve Waste" etc.) which arrives in the same or
+adjacent exchange. The binary frame exists solely to provide a precise
+timestamp and volume.
+
+For `0x2005` only, an additional field gives the tube number:
+```c
+tube_number = data[10]<<8 | data[9]    // 16-bit LE
+```
+
+Both frames write a 0xda-byte event struct to ONLINEX (type `0x3ea`), using
+`g_nRunStateFlags` as the current run state.
 
 ---
 
@@ -638,6 +695,90 @@ strncpy(g_szProgramName, pDecodedMsg + payload_offset, 100)
 strncpy(g_szVersionString, pDecodedMsg + payload_offset, 20)
 g_nVersionReceived = 1
 ```
+
+---
+
+**`handleLogMessage`** @ `0x004038c0`
+
+Handles OPC `0x2006` (step time/volume) and the `0x8004`–`0x8007` log
+message protocol.
+
+OPC `0x2006` (nob=8) — step base time and volume, reset at each method step:
+```c
+step_time   = data[4]<<24 | data[3]<<16 | data[2]<<8 | data[1]  // 32-bit LE, 10ms units
+step_volume = data[8]<<24 | data[7]<<16 | data[6]<<8 | data[5]  // 32-bit LE, 10µL units
+```
+
+Log message protocol (`0x8004`–`0x8007`) — ASCII text, transmitted as one
+to four frames using a simple begin/middle/end framing:
+
+| OPC | Role | Action |
+|-----|------|--------|
+| `0x8004` | single | Reset buffer to data, emit immediately |
+| `0x8005` | begin | Reset buffer to data, hold |
+| `0x8006` | middle | Append data to buffer, hold |
+| `0x8007` | end | Append data to buffer, emit |
+
+Observed log message strings (from physical test, not exhaustive):
+
+| Message | Trigger |
+|---------|---------|
+| `Flow <n> ml/min` | Flow rate set or changed |
+| `Concentration <n> %B` | Initial or changed %B |
+| `Manual Set, Concentration <n> %B` | User manually changed %B |
+| `Gradient, Length <n> ml, Target <n> %B` | Gradient step activated |
+| `Autozero` | UV autozero performed |
+| `Injection Valve Waste` | Injection valve → Waste position |
+| `Injection Valve Inj` | Injection valve → Inject position |
+| `Injection Valve Load` | Injection valve → Load position |
+| `Feed Tube Nr <n>` | Fraction collector tube changed |
+| `Fraction size <n> ml` | Fraction size set |
+| `Event Mark, from user interface` | User placed manual event mark |
+| `Error: <n> <description>` | Instrument error (e.g. "Error: 62 Check that tube position is OK") |
+
+The injection valve name is the only source of valve state; there is no
+binary OPC encoding the valve position. Initial valve state at connect time
+is not transmitted as a log message — it is embedded in the method dump
+(OPCs `0x2007`/`0x8008`/`0x8011`/`0x2008`).
+
+---
+
+**`handleDebugMessage`** @ `0x00403c20`
+
+Handles OPC `0x8003`. Data bytes are an ASCII debug string from the
+instrument firmware, using the same escape convention as the method dump:
+
+| Escape | Meaning |
+|--------|---------|
+| `~` (0x7e) | CR |
+| `}` (0x7d) | LF |
+
+---
+
+**`handleMethodDumpOpc`** @ `0x00403cf0`
+
+Implements a raw file-streaming protocol used by the Akta to transfer
+the current method (`.met`) file to the driver. The driver writes the
+received bytes to a temporary file on disk; on completion it notifies
+ONLINEX (type `0x3ed`).
+
+Frame sequence:
+
+| OPC | Role |
+|-----|------|
+| `0x2007` | Open new temp `.met` file; begin accumulation |
+| `0x8008` | Single-frame write: reset buffer, append data, flush to file |
+| `0x8009` | Multi-frame begin: reset buffer, append data (no flush) |
+| `0x8010` | Multi-frame middle: append data (no flush) |
+| `0x8011` | Multi-frame end: append data, flush to file |
+| `0x2008` (nob=1, data[1] ≤ 5) | Close temp file; copy to permanent name; notify ONLINEX (`0x3ed`) |
+| `0x2009` (nob=2) | Begin method save: open new temp file from method name |
+| `0x2010` | Confirm save: copy temp → permanent, reply `0x2011`/1 to `TX_DWNLOADX` |
+
+The body of each data frame uses the same `~`/`}`/`z`/`|`/`{` escape
+encoding as the debug message format. Parsing the resulting `.met` file
+would require a separate reverse-engineering effort. The initial valve
+position and all method settings are in this file.
 
 ---
 
@@ -691,19 +832,21 @@ write to LONLINE pipe. Special handling for event type `0x3ed`: if sub-type
 ### Signal name string table @ `0x00413128`
 
 ```
-0x413128: "INJ\0"
-0x41312c: "PRES\0\0\0\0"
-0x413134: "TEMP\0\0\0\0"
-0x41313c: "B\0\0\0"
-0x413140: "PH\0\0"
-0x413144: "COND\0\0\0\0"
-0x41314c: "UV\0\0"
+0x41312c: "PRES\0"   → channel 5 (pressure)
+0x413134: "TEMP\0"   → channel 4 (temperature)
+0x41313c: "B\0"      → channel 3 (%B concentration)
+0x413140: "PH\0"     → channel 2 (pH)
+0x413144: "COND\0"   → channel 1 (conductivity)
+0x41314c: "UV\0"     → channel 0 (UV absorbance)
 ```
 
-Channel table at `0x004130d4`: 10-byte entries
-`(threshold: int16, name_ptr: uint32, padding: uint32)`.
-Entry 0 → `UV`, entry 1 → `COND`, entry 2 → `PH`, entry 3 → `B`
-(`0x41313c`), entry 4 → `TEMP`, entry 5 → `PRES`.
+Note: `orsSetCurveInformation` in `Oci.exe` uses "PRESS" (5 chars) for the
+same channel; `p232_drv.exe` uses "PRES" (4 chars). These are the same
+physical channel.
+
+Channel table at `0x004130d4`: 10-byte entries; each entry has an enable
+flag at `0x004130d0 + idx*10`, a 2-byte type code at `+4`, and a 4-byte
+`name_ptr` at `+6`. Entries 0–5 correspond to UV, COND, PH, B, TEMP, PRES.
 
 ---
 
