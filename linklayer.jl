@@ -395,65 +395,71 @@ function run_linklayer(tx_queue::Channel, shutdown::Ref{Bool})
             reply   = write_frame_read_reply(sp, cur_frame)
             rx_len  = length(reply)
 
-            if rx_len == 0 || !validate_rx_frame(reply, rx_len)
-                # idle timeout: force-disconnect if no valid exchange for 5 s
-                if st.connected && st.idle_ms > IDLE_TIMEOUT_MS
-                    @warn "Idle timeout — disconnecting"
-                    st.connected  = false
-                    st.pending_tx = false
+            if rx_len > 0 && validate_rx_frame(reply, rx_len)
+                ctrl = reply[3]
+
+                if !st.connected
+                    # not connected: look for 5-byte frame with ctrl == 0x75
+                    if rx_len == 5 && ctrl == CTRL_CONN
+                        @info "Akta connected"
+                        st.sn         = 0x00
+                        st.rn         = 0x00
+                        st.pending_tx = false
+                        st.idle_ms    = 0
+                        st.connected  = true
+                        # queue identity request (OPC 0x1001, nob=1, data=0x00 = driver disabled)
+                        put!(tx_queue, (OPC_IDENTITY_REQUEST, UInt8[0x00]))
+                    else
+                        @debug "Unexpected frame while disconnected: ctrl=0x$(string(ctrl, base=16))"
+                    end
+
+                else
+                    # connected: process I-frame or RR supervisory frame
+                    # rx_ok mirrors the original rxOk flag: true only when I-frame SN is correct
+                    # (or for RR frames, which have no SN field).  idle_ms is only reset when
+                    # rx_ok is true, matching the original `if (rxOk) idle_ms = 0` guard.
+                    rx_ok = false
+
+                    if (ctrl & 0xf0) == CTRL_IFRAME
+                        received_sn = (ctrl >> 2) & 0x03
+                        if received_sn == (st.rn + 0x01) & 0x03
+                            st.rn  = received_sn
+                            parse_rx_data_frame(reply, rx_len)
+                            rx_ok  = true
+                        elseif received_sn == st.rn
+                            @debug "LinkLayer: same I-frame SN re-received ($received_sn)"
+                        else
+                            @debug "LinkLayer: SN error — expected $((st.rn+1)&3), got $received_sn"
+                        end
+                        # check whether Akta ACKed our last outbound I-frame (RN field)
+                        if st.sn == (ctrl & 0x03)
+                            st.pending_tx = false
+                            rx_ok && (st.idle_ms = 0)   # only reset if SN was also good
+                        else
+                            @debug "LinkLayer: RN mismatch in I-frame ctrl"
+                        end
+
+                    elseif (ctrl & 0xfc) == CTRL_RR_BASE
+                        # RR supervisory frame (ACK only, no data)
+                        if st.sn == (ctrl & 0x03)
+                            st.pending_tx = false
+                            st.idle_ms    = 0   # RR with correct RN is always a clean exchange
+                        else
+                            @debug "LinkLayer: RN mismatch in RR frame"
+                        end
+
+                    else
+                        @debug "LinkLayer: unexpected ctrl 0x$(string(ctrl, base=16))"
+                    end
                 end
-                continue
             end
 
-            ctrl = reply[3]
-
-            if !st.connected
-                # not connected: look for 5-byte frame with ctrl == 0x75
-                if rx_len == 5 && ctrl == CTRL_CONN
-                    @info "Akta connected"
-                    st.sn         = 0x00
-                    st.rn         = 0x00
-                    st.pending_tx = false
-                    st.idle_ms    = 0
-                    st.connected  = true
-                    # queue identity request (OPC 0x1001, nob=1, data=0x00 = driver disabled)
-                    put!(tx_queue, (OPC_IDENTITY_REQUEST, UInt8[0x00]))
-                else
-                    @debug "Unexpected frame while disconnected: ctrl=0x$(string(ctrl, base=16))"
-                end
-
-            else
-                # connected: process I-frame or RR supervisory frame
-                if (ctrl & 0xf0) == CTRL_IFRAME
-                    received_sn = (ctrl >> 2) & 0x03
-                    if received_sn == (st.rn + 0x01) & 0x03
-                        st.rn = received_sn
-                        parse_rx_data_frame(reply, rx_len)
-                    elseif received_sn == st.rn
-                        @debug "LinkLayer: duplicate I-frame SN=$received_sn (re-received)"
-                    else
-                        @debug "LinkLayer: SN error — expected $((st.rn+1)&3), got $received_sn"
-                    end
-                    # check whether Akta ACKed our last outbound I-frame
-                    if st.sn == (ctrl & 0x03)
-                        st.pending_tx = false
-                        st.idle_ms    = 0
-                    else
-                        @debug "LinkLayer: RN mismatch in I-frame ctrl"
-                    end
-
-                elseif (ctrl & 0xfc) == CTRL_RR_BASE
-                    # RR supervisory frame (ACK only, no data)
-                    if st.sn == (ctrl & 0x03)
-                        st.pending_tx = false
-                        st.idle_ms    = 0
-                    else
-                        @debug "LinkLayer: RN mismatch in RR frame"
-                    end
-
-                else
-                    @debug "LinkLayer: unexpected ctrl 0x$(string(ctrl, base=16))"
-                end
+            # idle timeout check -- reached every iteration regardless of frame validity,
+            # mirroring LAB_004062c0 in the original which is jumped to from all paths
+            if st.connected && st.idle_ms > IDLE_TIMEOUT_MS
+                @warn "Idle timeout — disconnecting"
+                st.connected  = false
+                st.pending_tx = false
             end
         end
 
