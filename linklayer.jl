@@ -285,17 +285,19 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # handle_trend_data  (handleTrendData @ 0x004030a0, 0x2001 branch)
 #
-# nob = 14.  Byte layout confirmed from Ghidra decompilation:
+# nob = 14.  Channel names confirmed from channel table at 0x004130d4:
 #   data[1]        time_delta   uint8, units 10ms
 #   data[2]        vol_delta    uint8, units 0.1µl
-#   data[3..5]     UV           24-bit signed LE
-#   data[6..8]     COND         24-bit unsigned LE
-#   data[9]        pH           bits [7:0]
-#   data[10]       pH[10:8] at bits[2:0], temp[4:0] at bits[7:3]
-#   data[11]       temp[9:5] at bits[4:0], press[2:0] at bits[7:5]
-#   data[12]       press[10:3]
-#   data[13]       flow[7:0]
-#   data[14]       flow[10:8] at bits[2:0]  (bias: raw - 100)
+#   data[3..5]     UV   (ch 0) 24-bit signed LE; scale ÷1e6
+#   data[6..8]     COND (ch 1) 24-bit unsigned LE; scale ÷1e3 → mS/cm
+#   data[9]        PH   (ch 2) bits [7:0]         \
+#   data[10]       PH[10:8] at bits[2:0]           } 11-bit; scale TBD
+#                  B[4:0]   at bits[7:3]           \
+#   data[11]       B[9:5]   at bits[4:0] (ch 3)    } 10-bit %B; scale TBD
+#                  PRES[2:0] at bits[7:5]           \
+#   data[12]       PRES[10:3] (ch 5)                } 11-bit; scale ÷1e3
+#   data[13]       TEMP[7:0]                        \
+#   data[14]       TEMP[10:8] at bits[2:0] (ch 4)   } 11-bit; bias -100, scale ÷10 → °C
 # ─────────────────────────────────────────────────────────────────────────────
 function handle_trend_data(data::Vector{UInt8})
     length(data) < 14 && (@warn "OPC 0x2001: short payload ($(length(data)) bytes)"; return)
@@ -308,14 +310,20 @@ function handle_trend_data(data::Vector{UInt8})
         uv_raw |= Int32(-16777216)  # sign-extend bit 23 to Int32
     end
 
-    cond_raw  = UInt32(data[6]) | (UInt32(data[7]) << 8) | (UInt32(data[8]) << 16)
-    ph_raw    = Int(data[9])  | ((Int(data[10]) & 0x07) << 8)           # 11-bit
-    temp_raw  = (Int(data[10]) >> 3) | ((Int(data[11]) & 0x1f) << 5)   # 10-bit
-    press_raw = (Int(data[11]) >> 5) | (Int(data[12]) << 3)             # 11-bit
-    flow_raw  = (Int(data[13]) | ((Int(data[14]) & 0x07) << 8)) - 100  # 11-bit, bias -100
+    cond_raw = UInt32(data[6]) | (UInt32(data[7]) << 8) | (UInt32(data[8]) << 16)
+    ph_raw   = Int(data[9])  | ((Int(data[10]) & 0x07) << 8)           # 11-bit (ch 2)
+    pctb_raw = (Int(data[10]) >> 3) | ((Int(data[11]) & 0x1f) << 5)    # 10-bit %B (ch 3)
+    pres_raw = (Int(data[11]) >> 5) | (Int(data[12]) << 3)             # 11-bit pressure (ch 5)
+    temp_raw = (Int(data[13]) | ((Int(data[14]) & 0x07) << 8)) - 100  # 11-bit TEMP (ch 4), bias -100
+
+    uv   = uv_raw / 1e6
+    cond = cond_raw / 1e3
+    pres = pres_raw / 1e3
+    temp = temp_raw / 10.0
 
     @info "Trend: Δt=$(time_delta * 10)ms Δv=$(round(vol_delta * 0.1; digits=1))µl" *
-          "  UV=$uv_raw COND=$cond_raw pH=$ph_raw temp=$temp_raw press=$press_raw flow=$flow_raw"
+          "  UV=$(round(uv; digits=6)) COND=$(round(cond; digits=3))mS/cm" *
+          "  pH=$ph_raw %B=$pctb_raw pres=$(round(pres; digits=3)) temp=$(round(temp; digits=1))°C"
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
