@@ -45,6 +45,19 @@ const OPC_BASE_TIME_VOL = UInt16(0x2002)
 const OPC_RUN_STATE = UInt16(0x2003)
 const OPC_INJECT = UInt16(0x2004)
 const OPC_TUBEFEED = UInt16(0x2005)
+const OPC_STEP_TIME_VOL = UInt16(0x2006)   # handleLogMessage @ 0x004038c0
+const OPC_METHOD_DATA_A = UInt16(0x2007)   # method programme data
+const OPC_METHOD_DATA_B = UInt16(0x2008)   # method programme data
+const OPC_DEBUG_MSG = UInt16(0x8003)       # handleDebugMessage @ 0x00403c20
+const OPC_LOG_SINGLE = UInt16(0x8004)      # single-frame log message
+const OPC_LOG_BEGIN = UInt16(0x8005)       # first frame of multi-frame log
+const OPC_LOG_CONT = UInt16(0x8006)        # middle frame of multi-frame log
+const OPC_LOG_END = UInt16(0x8007)         # final frame of multi-frame log
+const OPC_METHOD_DATA_C = UInt16(0x8008)   # method programme data
+const OPC_METHOD_DATA_D = UInt16(0x8009)   # method programme data
+const OPC_METHOD_DATA_E = UInt16(0x8010)   # method programme data
+const OPC_METHOD_DATA_F = UInt16(0x8011)   # method programme data
+const OPC_WATCHDOG = UInt16(0x3001)        # silently dropped
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LinkState -- mirrors the thread-local variables in thdLinklayer
@@ -355,6 +368,62 @@ function handle_run_state(data::Vector{UInt8})
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# handle_step_time_vol  (handleLogMessage @ 0x004038c0, 0x2006 branch)
+#
+# nob = 8.  Sets the current step's base time and volume — same encoding as
+# OPC 0x2002 (base_time_vol) but scoped to the current method step.
+#   data[1..4]   step_time   32-bit LE, units 10ms
+#   data[5..8]   step_vol    32-bit LE, units 0.1µl
+# ─────────────────────────────────────────────────────────────────────────────
+function handle_step_time_vol(data::Vector{UInt8})
+    length(data) < 8 && (@warn "OPC 0x2006: short payload ($(length(data)) bytes)"; return)
+
+    step_time = UInt32(data[1]) | (UInt32(data[2]) << 8) | (UInt32(data[3]) << 16) | (UInt32(data[4]) << 24)
+    step_vol  = UInt32(data[5]) | (UInt32(data[6]) << 8) | (UInt32(data[7]) << 16) | (UInt32(data[8]) << 24)
+
+    @info "Step time/vol: t=$(step_time * 10)ms vol=$(round(step_vol * 0.1; digits=1))µl"
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# handle_debug_message  (handleDebugMessage @ 0x00403c20, 0x8003)
+#
+# ASCII debug string from the instrument firmware.  Escape substitutions:
+#   '~' (0x7e) → CR,  '}' (0x7d) → LF
+# ─────────────────────────────────────────────────────────────────────────────
+function handle_debug_message(data::Vector{UInt8})
+    s = String(data)
+    s = replace(s, '~' => '\r', '}' => '\n')
+    @info "Debug msg: $(repr(s))"
+end
+
+# Log message buffer for multi-frame OPC 0x8005/0x8006/0x8007 messages.
+const _log_buf = Ref{String}("")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# handle_log_message  (handleLogMessage @ 0x004038c0, 0x8004–0x8007 branches)
+#
+# Log messages may arrive in 1–4 frames:
+#   0x8004  single  — reset buffer to this data, emit immediately
+#   0x8005  begin   — reset buffer to this data, hold
+#   0x8006  cont    — append to buffer, hold
+#   0x8007  end     — append to buffer, emit
+# Data bytes are ASCII text.
+# ─────────────────────────────────────────────────────────────────────────────
+function handle_log_message(opc::UInt16, data::Vector{UInt8})
+    text = String(data)
+    if opc == OPC_LOG_SINGLE
+        @info "Log: $text"
+    elseif opc == OPC_LOG_BEGIN
+        _log_buf[] = text
+    elseif opc == OPC_LOG_CONT
+        _log_buf[] *= text
+    elseif opc == OPC_LOG_END
+        @info "Log: $(_log_buf[] * text)"
+        _log_buf[] = ""
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # dispatch_rx_opc  (mirrors thdControl's RX_UPLOADX message handlers)
 #
 # On receiving OPC 0x8002 (version string) we queue the driver-enable message
@@ -383,6 +452,19 @@ function dispatch_rx_opc(opc::UInt16, data::Vector{UInt8}, tx_queue::Channel, st
         @info "Inject event: $(length(data)) bytes"
     elseif opc == OPC_TUBEFEED
         @info "Tubefeed event: $(length(data)) bytes"
+    elseif opc == OPC_STEP_TIME_VOL
+        handle_step_time_vol(data)
+    elseif opc == OPC_METHOD_DATA_A || opc == OPC_METHOD_DATA_B
+        @info "Method data (0x$(string(opc, base=16, pad=4))): $(length(data)) bytes"
+    elseif opc == OPC_DEBUG_MSG
+        handle_debug_message(data)
+    elseif opc == OPC_LOG_SINGLE || opc == OPC_LOG_BEGIN || opc == OPC_LOG_CONT || opc == OPC_LOG_END
+        handle_log_message(opc, data)
+    elseif opc == OPC_METHOD_DATA_C || opc == OPC_METHOD_DATA_D ||
+           opc == OPC_METHOD_DATA_E || opc == OPC_METHOD_DATA_F
+        @info "Method data (0x$(string(opc, base=16, pad=4))): $(length(data)) bytes"
+    elseif opc == OPC_WATCHDOG
+        # silently drop
     else
         @info "OPC 0x$(string(opc, base=16, pad=4)): $(length(data)) bytes"
     end
