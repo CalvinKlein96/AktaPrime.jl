@@ -321,9 +321,9 @@ function handle_trend_data(data::Vector{UInt8})
     pres = pres_raw / 1e3
     temp = temp_raw / 10.0
 
-    @info "Trend: Δt=$(time_delta * 10)ms Δv=$(round(vol_delta * 0.1; digits=1))µl" *
+    @info "Trend: Δt=$(time_delta * 10)ms Δv=$(round(vol_delta / 100.0; digits=4))mL" *
           "  UV=$(round(uv; digits=6)) COND=$(round(cond; digits=3))mS/cm" *
-          "  pH=$ph_raw %B=$pctb_raw pres=$(round(pres; digits=3)) temp=$(round(temp; digits=1))°C"
+          "  pH=$ph_raw %B=$(pctb_raw / 10.0) pres=$(round(pres; digits=3)) temp=$(round(temp; digits=1))°C"
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
