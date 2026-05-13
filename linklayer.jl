@@ -51,12 +51,13 @@ const OPC_TUBEFEED         = UInt16(0x2005)
 # ─────────────────────────────────────────────────────────────────────────────
 mutable struct LinkState
     connected::Bool
-    sn::UInt8        # current TX sequence number mod 4
-    rn::UInt8        # last received Akta SN (expected_next = rn+1 mod 4)
-    pending_tx::Bool # true while an I-frame awaits ACK
-    idle_ms::Int     # ms since last valid exchange; reset on good reply
+    sn::UInt8           # current TX sequence number mod 4
+    rn::UInt8           # last received Akta SN (expected_next = rn+1 mod 4)
+    pending_tx::Bool    # true while an I-frame awaits ACK
+    idle_ms::Int        # ms since last valid exchange; reset on good reply
+    driver_enabled::Bool  # true after OPC 0x1001/0x01 sent (driver-enable gate)
 end
-LinkState() = LinkState(false, 0x00, 0x00, false, 0)
+LinkState() = LinkState(false, 0x00, 0x00, false, 0, false)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # compute_checksum  (computeChecksum @ 0x004051e0)
@@ -252,14 +253,23 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # dispatch_rx_opc  (mirrors thdControl's RX_UPLOADX message handlers)
+#
+# On receiving OPC 0x8002 (version string) we queue the driver-enable message
+# OPC 0x1001/0x01.  This mirrors thdControl's response to rxUploadMsg==4
+# (driver-enable gate fired) which writes {0x1001, [0x01]} to TX_DWNLOADX.
 # ─────────────────────────────────────────────────────────────────────────────
-function dispatch_rx_opc(opc::UInt16, data::Vector{UInt8})
+function dispatch_rx_opc(opc::UInt16, data::Vector{UInt8}, tx_queue::Channel, st::LinkState)
     if opc == OPC_PROG_NAME
         name = rstrip(String(data[1:min(100, end)]), '\0')
         @info "Akta programme name: $name"
     elseif opc == OPC_VERSION_STRING
         ver = rstrip(String(data[1:min(20, end)]), '\0')
         @info "Akta version: $ver"
+        if !st.driver_enabled
+            st.driver_enabled = true
+            put!(tx_queue, (OPC_IDENTITY_REQUEST, UInt8[0x01]))
+            @info "Queued driver-enable (OPC 0x1001/0x01)"
+        end
     elseif opc == OPC_TREND_DATA
         @debug "Trend data: $(length(data)) bytes"
     elseif opc == OPC_RUN_STATE
@@ -281,12 +291,12 @@ end
 # Decodes the payload section of a received I-frame and dispatches each OPC.
 # frame: complete raw frame bytes (includes '#', addr, ctrl, cs, CR).
 # ─────────────────────────────────────────────────────────────────────────────
-function parse_rx_data_frame(frame::AbstractVector{UInt8}, len::Int)
+function parse_rx_data_frame(frame::AbstractVector{UInt8}, len::Int, tx_queue::Channel, st::LinkState)
     len < 6 && return
     # payload sits between ctrl byte and checksum: frame[4..len-2]
     payload = @view frame[4:len-2]
     for (opc, data) in decode_opc_payload(payload)
-        dispatch_rx_opc(opc, data)
+        dispatch_rx_opc(opc, data, tx_queue, st)
     end
 end
 
@@ -424,7 +434,7 @@ function run_linklayer(tx_queue::Channel, shutdown::Ref{Bool})
                         received_sn = (ctrl >> 2) & 0x03
                         if received_sn == (st.rn + 0x01) & 0x03
                             st.rn  = received_sn
-                            parse_rx_data_frame(reply, rx_len)
+                            parse_rx_data_frame(reply, rx_len, tx_queue, st)
                             rx_ok  = true
                         elseif received_sn == st.rn
                             @debug "LinkLayer: same I-frame SN re-received ($received_sn)"
@@ -458,8 +468,9 @@ function run_linklayer(tx_queue::Channel, shutdown::Ref{Bool})
             # mirroring LAB_004062c0 in the original which is jumped to from all paths
             if st.connected && st.idle_ms > IDLE_TIMEOUT_MS
                 @warn "Idle timeout — disconnecting"
-                st.connected  = false
-                st.pending_tx = false
+                st.connected       = false
+                st.pending_tx      = false
+                st.driver_enabled  = false
             end
         end
 
