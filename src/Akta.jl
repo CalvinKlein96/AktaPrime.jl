@@ -96,8 +96,35 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # main — application entry point
 # ─────────────────────────────────────────────────────────────────────────────
-function main()
+function main(filename::Union{String,Nothing}=nothing)
     global_logger(ConsoleLogger(stderr, Logging.Info))
+
+    # ── Replay mode: load an existing CSV log and display it ──────────────────
+    if filename !== nothing
+        isfile(filename) || (@error "File not found: $filename"; return)
+        @info "Replay mode — loading \"$filename\""
+
+        app = AppState()
+        load_csv_log!(app, filename)
+        app.log_filename = filename
+
+        fig = build_gui(app)
+        screen = display(fig)
+        @info "GUI opened (replay)"
+
+        Base.exit_on_sigint(false)
+        try
+            while isopen(screen)
+                sleep(0.05)
+            end
+        catch e
+            e isa InterruptException || rethrow()
+            @info "Interrupted"
+        end
+        return
+    end
+
+    # ── Live / demo mode ──────────────────────────────────────────────────────
     @info "Akta PRIME logger starting"
 
     # ── Check serial port availability ─────────────────────────────────────────
