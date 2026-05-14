@@ -277,17 +277,26 @@ function _set_inject_from_log!(text::String, inst::InstrumentState)::Bool
     return false
 end
 
-function _set_fraction_from_log!(text::String, inst::InstrumentState)::Bool
+function _set_fraction_from_log!(text::String, inst::InstrumentState, app::AppState)::Bool
     msg = strip(text)
+    changed = false
     if (m = match(r"^Fraction size\s+([0-9]+(?:\.[0-9]+)?)\s+ml$"i, msg)) !== nothing
         inst.fraction_vol_mL = parse(Float64, m.captures[1])
-        return true
+        changed = true
     end
     if (m = match(r"^Feed Tube Nr\s+(\d+)$"i, msg)) !== nothing
         inst.fraction_number = max(1, parse(Int, m.captures[1]))
-        return true
+        changed = true
     end
-    return false
+
+    # Update fraction state machine if anything changed
+    if changed
+        if update_fraction_state!(app)
+            notify(app.fractions)
+        end
+    end
+
+    return changed
 end
 
 function _handle_run_state(data::Vector{UInt8}, app::AppState)
@@ -340,7 +349,7 @@ function _handle_log_message(opc::UInt16, data::Vector{UInt8}, app::AppState)
     text = String(copy(data))
     if opc == OPC_LOG_SINGLE
         inst = app.inst[]
-        changed = _set_inject_from_log!(text, inst) | _set_fraction_from_log!(text, inst)
+        changed = _set_inject_from_log!(text, inst) | _set_fraction_from_log!(text, inst, app)
         changed && notify(app.inst)
         @info "Log: $text"
         push_event!(app, EVT_LOG, text)
@@ -352,7 +361,7 @@ function _handle_log_message(opc::UInt16, data::Vector{UInt8}, app::AppState)
         full = app.log_buf * text
         app.log_buf = ""
         inst = app.inst[]
-        changed = _set_inject_from_log!(full, inst) | _set_fraction_from_log!(full, inst)
+        changed = _set_inject_from_log!(full, inst) | _set_fraction_from_log!(full, inst, app)
         changed && notify(app.inst)
         @info "Log: $full"
         push_event!(app, EVT_LOG, full)
@@ -401,7 +410,13 @@ function dispatch_rx_opc(opc::UInt16, data::Vector{UInt8},
         else
             inst.fraction_number += 1
         end
+
+        # Update fraction state machine
+        if update_fraction_state!(app)
+            notify(app.fractions)
+        end
         notify(app.inst)
+
         txt = "Tubefeed event ($(length(data)) bytes)"
         @info txt
         push_event!(app, EVT_TUBEFEED, txt)

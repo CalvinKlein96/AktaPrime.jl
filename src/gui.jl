@@ -9,6 +9,8 @@ const COL_PRES = RGBf(0.75, 0.45, 0.00)
 const COL_BUF_A = RGBf(0.80, 0.10, 0.10)   # red
 const COL_BUF_B = RGBf(0.90, 0.80, 0.05)   # yellow
 
+const FRAC_COLORS = [RGBf(0.8, 0.9, 1.0), RGBf(1.0, 1.0, 0.8)]  # light blue, light yellow
+
 const EVT_COLORS = Dict(
     EVT_INJECT => (:purple, :dash),
     EVT_RUN_STATE => (:gray50, :dash),
@@ -23,6 +25,44 @@ _inject_label(v::InjectValue) =
     v == IV_LOAD ? "LOAD" :
     v == IV_INJECT ? "INJECT" :
     v == IV_WASTE ? "WASTE" : "UNKNOWN"
+
+function _event_label_top(e::AktaEvent)::String
+    if e.kind == EVT_INJECT
+        if (m = match(r"Valve\s*→\s*([A-Za-z_]+)", e.text)) !== nothing
+            return "INJ $(uppercase(m.captures[1]))"
+        end
+        return "INJECT"
+    elseif e.kind == EVT_RUN_STATE
+        if (m = match(r"Run state:\s*([^\s]+)", e.text)) !== nothing
+            return "STATE $(uppercase(m.captures[1]))"
+        end
+        return "STATE"
+    elseif e.kind == EVT_STEP
+        return "STEP"
+    elseif e.kind == EVT_LOG
+        # Special handling for fraction size zero-transitions
+        if contains(e.text, "Fraction size")
+            if (m = match(r"Fraction size (\d+(?:\.\d+)?)", e.text)) !== nothing
+                val = parse(Float64, m.captures[1])
+                return val > 0.0 ? "FRAC START" : "FRAC STOP"
+            end
+        end
+        return length(e.text) > 18 ? "LOG $(e.text[1:15])..." : "LOG $(e.text)"
+    elseif e.kind == EVT_CONNECT
+        return "CONNECT"
+    elseif e.kind == EVT_DISCONNECT
+        return "DISCONNECT"
+    end
+    return string(e.kind)
+end
+
+function _fraction_label_bottom(e::AktaEvent)::String
+    # Show just the fraction number (no "F#" prefix)
+    if (m = match(r"Feed Tube Nr\s+(\d+)", e.text)) !== nothing
+        return m.captures[1]  # Plain number only
+    end
+    return "?"
+end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # build_gui — construct the Figure and wire all Observables
@@ -90,6 +130,141 @@ function build_gui(app::AppState)::Figure
                 xautolimits=false, yautolimits=false)
         end
     end
+
+    # ── Fraction collection spans (vspans) on UV panel ─────────────────────────
+    # Draw alternating colored vertical bands showing each fraction collection period,
+    # with the fraction number centered in each span.
+
+    fraction_vspans_data = @lift begin
+        fracs = $(app.fractions)
+        by_vol = $x_mode_is_vol
+
+        spans = []
+        for (i, frac) in enumerate(fracs)
+            # Use end times if available, otherwise extend to trend end
+            x_start = by_vol ? frac.start_vol_mL : frac.start_time_ms / 60_000
+            x_end = if !isnothing(frac.end_time_ms) && !isnothing(frac.end_vol_mL)
+                by_vol ? frac.end_vol_mL : frac.end_time_ms / 60_000
+            else
+                # Fraction still open; use current position or trend end
+                if !isempty($_trend)
+                    $_trend[end] |> p -> (by_vol ? p.cum_vol_mL : p.cum_time_ms / 60_000)
+                else
+                    x_start + 0.1
+                end
+            end
+            push!(spans, (x_start, x_end, frac.fraction_number))
+        end
+
+        spans
+    end
+
+    # Get y limits for fraction spans
+    uv_y_limits = @lift begin
+        u = $uv_arr
+        ymin = minimum(u)
+        ymax = maximum(u)
+        (ymin, ymax)
+    end
+
+    # Storage for polygon and text handles so we can delete and redraw them
+    fraction_poly_handles = Makie.AbstractPlot[]
+    fraction_text_handles = Makie.AbstractPlot[]
+
+    on(fraction_vspans_data) do spans
+        # Delete previous artists
+        for h in fraction_poly_handles
+            delete!(ax_uv, h)
+        end
+        empty!(fraction_poly_handles)
+
+        for h in fraction_text_handles
+            delete!(ax_uv, h)
+        end
+        empty!(fraction_text_handles)
+
+        # Draw new fraction spans
+        if !isempty(uv_y_limits[])
+            (ymin, ymax) = uv_y_limits[]
+
+            for (i, (x_start, x_end, frac_num)) in enumerate(spans)
+                if x_end > x_start
+                    color = FRAC_COLORS[((i-1)%length(FRAC_COLORS))+1]
+
+                    # Draw span as polygon
+                    pts = Point2f[(x_start, ymin), (x_end, ymin), (x_end, ymax), (x_start, ymax)]
+                    poly_h = poly!(ax_uv, [pts]; color=(color, 0.25), strokewidth=0,
+                        xautolimits=false, yautolimits=false)
+                    push!(fraction_poly_handles, poly_h)
+
+                    # Draw fraction number centered in span
+                    x_mid = (x_start + x_end) / 2
+                    y_mid = (ymin + ymax) / 2
+                    txt_h = text!(ax_uv, [x_mid], [y_mid]; text=[string(frac_num)],
+                        fontsize=13, color=:gray40, align=(:center, :center),
+                        xautolimits=false, yautolimits=false)
+                    push!(fraction_text_handles, txt_h)
+                end
+            end
+        end
+    end
+
+    # Trigger initial draw
+    notify(fraction_vspans_data)
+
+    # ── Other event text labels on UV panel ────────────────────────────────────
+    # Filter other events, keeping only the non-tube-feed events (and zero-transition fraction size changes)
+    evt_other = @lift begin
+        events = $(app.events)
+        # Track fraction volume state to detect zero-transitions
+        frac_vol_states = Float64[]
+        for e in events
+            if e.kind == EVT_LOG && contains(e.text, "Fraction size")
+                if (m = match(r"Fraction size (\d+(?:\.\d+)?)", e.text)) !== nothing
+                    push!(frac_vol_states, parse(Float64, m.captures[1]))
+                end
+            end
+        end
+
+        # Collect filtered events: exclude tube-feeds, keep zero-transition fraction-size events
+        filtered = AktaEvent[]
+        frac_vol_prev = 0.0
+        frac_vol_idx = 0
+        for e in events
+            if e.kind == EVT_TUBEFEED
+                continue  # Shown as vspans instead
+            elseif e.kind == EVT_LOG && contains(e.text, "Fraction size")
+                frac_vol_idx += 1
+                frac_vol_current = frac_vol_idx <= length(frac_vol_states) ? frac_vol_states[frac_vol_idx] : 0.0
+                # Show only on zero-transitions: 0→>0 or >0→0
+                if (frac_vol_prev == 0.0 && frac_vol_current > 0.0) || (frac_vol_prev > 0.0 && frac_vol_current == 0.0)
+                    push!(filtered, e)
+                end
+                frac_vol_prev = frac_vol_current
+            else
+                push!(filtered, e)
+            end
+        end
+        filtered
+    end
+
+    uv_text_top_y = @lift begin
+        u = $uv_arr
+        ymax = maximum(u)
+        span = max(1e-6, ymax - minimum(u))
+        ymax - 0.05 * span
+    end
+
+    evt_top_x = @lift begin
+        by_vol = $x_mode_is_vol
+        [by_vol ? e.cum_vol_mL : e.cum_time_ms / 60_000 for e in $evt_other]
+    end
+    evt_top_y = @lift fill($uv_text_top_y[], length($evt_other))
+    evt_top_lbl = @lift [_event_label_top(e) for e in $evt_other]
+
+    text!(ax_uv, evt_top_x, evt_top_y;
+        text=evt_top_lbl, fontsize=8, color=:gray25,
+        align=(:center, :top), xautolimits=false, yautolimits=false)
 
     # ── Event legend ──────────────────────────────────────────────────────────
     legend_elements = [LineElement(color=EVT_COLORS[k][1], linestyle=EVT_COLORS[k][2])

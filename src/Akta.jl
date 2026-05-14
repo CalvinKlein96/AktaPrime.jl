@@ -23,15 +23,20 @@ function run_demo(shutdown::Ref{Bool}, app::AppState)
     notify(app.inst)
 
     # 2 s of simulated time per step, 0.2 s sleep → 10× real-time speedup.
-    # At 1 mL/min: inject at t=2.5 min (step 75), gradient at t=3 min (step 90),
-    # UV peak at t=4 min (step 120).
+    # Flow rate varies between 0.5–2.0 mL/min so time and volume axes diverge visibly.
     step = 0
+    cum_vol = 0.0      # accumulated volume in mL (not derived from fixed flow)
     while !shutdown[]
         sleep(0.2)
         step += 1
-        t_ms = step * 2_000.0          # 2 s per step
-        v_mL = t_ms * (1.0 / 60_000)  # 1 mL/min
+        t_ms = step * 2_000.0          # 2 s per step (fixed time)
         t_min = t_ms / 60_000
+
+        # Flow rate: 1 mL/min baseline with a slow sinusoidal variation ±0.5 mL/min
+        flow_mL_per_min = 1.0 + 0.5 * sin(t_min * 0.8)
+        flow_mL_per_ms = flow_mL_per_min / 60_000
+        cum_vol += flow_mL_per_ms * 2_000.0  # Δv for this 2 s step
+        v_mL = cum_vol
 
         uv = 0.02 + 1.2 * exp(-((t_min - 4.0)^2) / (2 * 0.4^2)) +
              0.5 * exp(-((t_min - 6.5)^2) / (2 * 0.2^2))
@@ -69,6 +74,9 @@ function run_demo(shutdown::Ref{Bool}, app::AppState)
             idx = mod((step - 1) ÷ 30, length(sizes)) + 1
             new_size = sizes[idx]
             app.inst[].fraction_vol_mL = new_size
+            if update_fraction_state!(app)
+                notify(app.fractions)
+            end
             notify(app.inst)
             push_event!(app, EVT_LOG, @sprintf("Fraction size %.1f ml", new_size))
         end
@@ -76,6 +84,9 @@ function run_demo(shutdown::Ref{Bool}, app::AppState)
         # Advance fraction number periodically only when fraction collection is active.
         if step % 20 == 0 && app.inst[].fraction_vol_mL > 0
             app.inst[].fraction_number += 1
+            if update_fraction_state!(app)
+                notify(app.fractions)
+            end
             notify(app.inst)
             push_event!(app, EVT_TUBEFEED, "Feed Tube Nr $(app.inst[].fraction_number)")
         end

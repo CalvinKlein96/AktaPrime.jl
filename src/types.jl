@@ -12,6 +12,15 @@ struct TrendPoint
     temp_degC::Float64   # temperature, °C
 end
 
+"""A fraction collection period with start/end time and volume."""
+struct Fraction
+    fraction_number::Int
+    start_time_ms::Float64   # cumulative run time when fraction started
+    start_vol_mL::Float64    # cumulative run volume when fraction started
+    end_time_ms::Union{Float64,Nothing}   # cumulative run time when fraction stopped (if completed)
+    end_vol_mL::Union{Float64,Nothing}    # cumulative run volume when fraction stopped (if completed)
+end
+
 @enum EventKind begin
     EVT_CONNECT
     EVT_DISCONNECT
@@ -51,8 +60,9 @@ mutable struct InstrumentState
     step_vol_mL::Float64
     fraction_number::Int
     fraction_vol_mL::Float64
+    current_fraction_idx::Union{Int,Nothing}  # index into app.fractions[] of active fraction, or nothing if idle
 end
-InstrumentState() = InstrumentState("---", 0.0, 0.0, 0.0, 0.0, IV_UNKNOWN, "", "", 0.0, 0.0, 1, 0.0)
+InstrumentState() = InstrumentState("---", 0.0, 0.0, 0.0, 0.0, IV_UNKNOWN, "", "", 0.0, 0.0, 1, 0.0, nothing)
 
 """
 Application-wide shared state.  Passed to OPC handlers and the CSV writer.
@@ -64,6 +74,7 @@ mutable struct AppState
     trend_data::Observable{Vector{TrendPoint}}
     events::Observable{Vector{AktaEvent}}
     inst::Observable{InstrumentState}
+    fractions::Observable{Vector{Fraction}}
     iszoomed::Observable{Bool}
 
     # multi-frame log message buffer (OPC 0x8005–0x8007)
@@ -80,6 +91,7 @@ AppState() = AppState(
     Observable(TrendPoint[]),
     Observable(AktaEvent[]),
     Observable(InstrumentState()),
+    Observable(Fraction[]),
     Observable(false),
     "",
     nothing,
@@ -87,6 +99,85 @@ AppState() = AppState(
 )
 
 # ── helpers ──────────────────────────────────────────────────────────────────
+
+"""
+Update fraction state based on current instrument state.
+Detects transitions: fraction_vol_mL going 0→>0 (start), >0→0 (stop), or fraction_number change (new tube).
+Returns true if fractions Observable should be notified.
+"""
+function update_fraction_state!(app::AppState)::Bool
+    inst = app.inst[]
+    fracs = app.fractions[]
+    changed = false
+
+    # Determine if we should be collecting (fraction_vol_mL > 0 = active)
+    collecting = inst.fraction_vol_mL > 0
+
+    if collecting && isnothing(inst.current_fraction_idx)
+        # ── Start new fraction (transition 0→>0) ──
+        frac = Fraction(
+            inst.fraction_number,
+            inst.cum_time_ms,
+            inst.cum_vol_mL,
+            nothing,
+            nothing
+        )
+        push!(fracs, frac)
+        inst.current_fraction_idx = length(fracs)
+        changed = true
+        @info "Started fraction #$(inst.fraction_number) at t=$(inst.cum_time_ms/1000)s v=$(inst.cum_vol_mL)mL"
+
+    elseif collecting && !isnothing(inst.current_fraction_idx)
+        idx = inst.current_fraction_idx
+        if idx <= length(fracs)
+            current = fracs[idx]
+            # Check if fraction_number changed (means new tube, so close old and start new)
+            if current.fraction_number != inst.fraction_number
+                # Close current fraction
+                fracs[idx] = Fraction(
+                    current.fraction_number,
+                    current.start_time_ms,
+                    current.start_vol_mL,
+                    inst.cum_time_ms,
+                    inst.cum_vol_mL
+                )
+                @info "Stopped fraction #$(current.fraction_number) at t=$(inst.cum_time_ms/1000)s v=$(inst.cum_vol_mL)mL"
+
+                # Start new fraction
+                frac = Fraction(
+                    inst.fraction_number,
+                    inst.cum_time_ms,
+                    inst.cum_vol_mL,
+                    nothing,
+                    nothing
+                )
+                push!(fracs, frac)
+                inst.current_fraction_idx = length(fracs)
+                @info "Started fraction #$(inst.fraction_number) at t=$(inst.cum_time_ms/1000)s v=$(inst.cum_vol_mL)mL"
+                changed = true
+            end
+        end
+
+    elseif !collecting && !isnothing(inst.current_fraction_idx)
+        # ── Stop fraction (transition >0→0) ──
+        idx = inst.current_fraction_idx
+        if idx <= length(fracs)
+            current = fracs[idx]
+            fracs[idx] = Fraction(
+                current.fraction_number,
+                current.start_time_ms,
+                current.start_vol_mL,
+                inst.cum_time_ms,
+                inst.cum_vol_mL
+            )
+            @info "Stopped fraction #$(current.fraction_number) at t=$(inst.cum_time_ms/1000)s v=$(inst.cum_vol_mL)mL"
+        end
+        inst.current_fraction_idx = nothing
+        changed = true
+    end
+
+    return changed
+end
 
 function push_event!(app::AppState, kind::EventKind, text::String)
     inst = app.inst[]
