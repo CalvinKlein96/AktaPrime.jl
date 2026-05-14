@@ -63,6 +63,9 @@ mutable struct AppState
 
     # open CSV file (nothing until the user confirms a filename)
     csv_io       :: Union{IO,Nothing}
+
+    # log filename shown in the GUI status panel
+    log_filename :: String
 end
 
 AppState() = AppState(
@@ -72,6 +75,7 @@ AppState() = AppState(
     Observable(InstrumentState()),
     "",
     nothing,
+    "",
 )
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -81,4 +85,5 @@ function push_event!(app::AppState, kind::EventKind, text::String)
     push!(app.events[], ev)
     notify(app.events)
     write_csv_event(app, ev)
+    @info "[$kind] $text"
 end
