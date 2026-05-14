@@ -29,40 +29,55 @@ function run_demo(shutdown::Ref{Bool}, app::AppState)
     while !shutdown[]
         sleep(0.2)
         step += 1
-        t_ms  = step * 2_000.0          # 2 s per step
-        v_mL  = t_ms * (1.0 / 60_000)  # 1 mL/min
+        t_ms = step * 2_000.0          # 2 s per step
+        v_mL = t_ms * (1.0 / 60_000)  # 1 mL/min
         t_min = t_ms / 60_000
 
-        uv   = 0.02 + 1.2 * exp(-((t_min - 4.0)^2) / (2 * 0.4^2)) +
-                      0.5 * exp(-((t_min - 6.5)^2) / (2 * 0.2^2))
+        uv = 0.02 + 1.2 * exp(-((t_min - 4.0)^2) / (2 * 0.4^2)) +
+             0.5 * exp(-((t_min - 6.5)^2) / (2 * 0.2^2))
         cond = 10.0 + 2.0 * sin(t_min * 0.5)
         pctb = clamp(t_min < 3.0 ? 5.0 : 5.0 + 30.0 * (t_min - 3.0), 5.0, 100.0)
         pres = 0.40 + 0.02 * sin(t_min * 2.0)
 
-        # Keep accumulators in sync so push_event! timestamps events correctly.
-        app.cum_time_ms = t_ms
-        app.cum_vol_mL  = v_mL
+        # Keep InstrumentState accumulators in sync so push_event! timestamps events correctly.
+        s = app.inst[]
+        s.cum_time_ms = t_ms
+        s.cum_vol_mL = v_mL
 
         pt = TrendPoint(t_ms, v_mL, uv, cond, Int32(512), pctb, pres, 22.0)
         push!(app.trend_data[], pt)
         notify(app.trend_data)
         write_csv_trend(app, pt)
 
-        s = app.inst[]
         s.run_time_ms = t_ms
-        s.run_vol_mL  = v_mL
+        s.run_vol_mL = v_mL
         notify(app.inst)
 
-        if step == 75       # t = 2.5 min — inject
-            app.inst[].inject_active = true; notify(app.inst)
-            push_event!(app, EVT_INJECT, "Valve → INJECT (demo)")
-        elseif step == 90   # t = 3.0 min — gradient start / return to load
-            app.inst[].inject_active = false; notify(app.inst)
-            push_event!(app, EVT_INJECT, "Valve → LOAD (demo)")
-            push_event!(app, EVT_STEP,   "Gradient start (demo)")
-        elseif step == 300  # t = 10 min — end of run
-            app.inst[].run_state = "End"; notify(app.inst)
-            push_event!(app, EVT_RUN_STATE, "Run complete (demo)")
+        # Cycle inject state every 40 demo steps: UNKNOWN -> LOAD -> INJECT -> WASTE.
+        if (step - 1) % 40 == 0
+            valves = (IV_UNKNOWN, IV_LOAD, IV_INJECT, IV_WASTE)
+            idx = mod((step - 1) ÷ 40, length(valves)) + 1
+            new_valve = valves[idx]
+            app.inst[].inject_value = new_valve
+            notify(app.inst)
+            push_event!(app, EVT_INJECT, "Valve → $(_inject_label(new_valve)) (demo)")
+        end
+
+        # Cycle fraction size every 30 steps, including zero (= route to waste).
+        if (step - 1) % 30 == 0
+            sizes = (0.0, 0.5, 1.0, 2.0)
+            idx = mod((step - 1) ÷ 30, length(sizes)) + 1
+            new_size = sizes[idx]
+            app.inst[].fraction_vol_mL = new_size
+            notify(app.inst)
+            push_event!(app, EVT_LOG, @sprintf("Fraction size %.1f ml", new_size))
+        end
+
+        # Advance fraction number periodically only when fraction collection is active.
+        if step % 20 == 0 && app.inst[].fraction_vol_mL > 0
+            app.inst[].fraction_number += 1
+            notify(app.inst)
+            push_event!(app, EVT_TUBEFEED, "Feed Tube Nr $(app.inst[].fraction_number)")
         end
     end
 end
