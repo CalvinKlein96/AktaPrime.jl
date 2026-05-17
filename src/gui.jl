@@ -10,6 +10,7 @@ const COL_BUF_A = RGBf(0.80, 0.10, 0.10)   # red
 const COL_BUF_B = RGBf(0.90, 0.80, 0.05)   # yellow
 
 const FRAC_COLORS = [RGBf(0.8, 0.9, 1.0), RGBf(1.0, 1.0, 0.8)]  # light blue, light yellow
+const FRAC_ALPHA = 0.22
 
 const EVT_COLORS = Dict(
     EVT_INJECT => (:hotpink, :solid),
@@ -131,86 +132,58 @@ function build_gui(app::AppState)::Figure
         end
     end
 
-    # ── Fraction collection spans (vspans) on UV panel ─────────────────────────
-    # Draw alternating colored vertical bands showing each fraction collection period,
-    # with the fraction number centered in each span.
-
-    fraction_vspans_data = @lift begin
+    # ── Fraction collection spans on UV and %B panels ──────────────────────────
+    # Build starts/ends/colors from one observable to keep lengths in lockstep.
+    fraction_spans = @lift begin
         fracs = $(app.fractions)
         by_vol = $x_mode_is_vol
 
-        spans = []
-        for (i, frac) in enumerate(fracs)
-            # Use end times if available, otherwise extend to trend end
-            x_start = by_vol ? frac.start_vol_mL : frac.start_time_ms / 60_000
-            x_end = if !isnothing(frac.end_time_ms) && !isnothing(frac.end_vol_mL)
-                by_vol ? frac.end_vol_mL : frac.end_time_ms / 60_000
+        starts = Float64[]
+        ends = Float64[]
+        colors = RGBf[]
+        mids = Float64[]
+        labels = String[]
+
+        for (i, f) in enumerate(fracs)
+            x0 = by_vol ? f.start_vol_mL : f.start_time_ms / 60_000
+            x1 = if !isnothing(f.end_time_ms) && !isnothing(f.end_vol_mL)
+                by_vol ? something(f.end_vol_mL) : something(f.end_time_ms) / 60_000
+            elseif !isempty($_trend)
+                p = $_trend[end]
+                by_vol ? p.cum_vol_mL : p.cum_time_ms / 60_000
             else
-                # Fraction still open; use current position or trend end
-                if !isempty($_trend)
-                    $_trend[end] |> p -> (by_vol ? p.cum_vol_mL : p.cum_time_ms / 60_000)
-                else
-                    x_start + 0.1
-                end
+                x0
             end
-            push!(spans, (x_start, x_end, frac.fraction_number))
-        end
 
-        spans
-    end
-
-    # Get y limits for fraction spans
-    uv_y_limits = @lift begin
-        u = $uv_arr
-        ymin = minimum(u)
-        ymax = maximum(u)
-        (ymin, ymax)
-    end
-
-    # Storage for polygon and text handles so we can delete and redraw them
-    fraction_poly_handles = Makie.AbstractPlot[]
-    fraction_text_handles = Makie.AbstractPlot[]
-
-    on(fraction_vspans_data) do spans
-        # Delete previous artists
-        for h in fraction_poly_handles
-            delete!(ax_uv, h)
-        end
-        empty!(fraction_poly_handles)
-
-        for h in fraction_text_handles
-            delete!(ax_uv, h)
-        end
-        empty!(fraction_text_handles)
-
-        # Draw new fraction spans
-        if !isempty(uv_y_limits[])
-            (ymin, ymax) = uv_y_limits[]
-
-            for (i, (x_start, x_end, frac_num)) in enumerate(spans)
-                if x_end > x_start
-                    color = FRAC_COLORS[((i-1)%length(FRAC_COLORS))+1]
-
-                    # Draw span as polygon
-                    pts = Point2f[(x_start, ymin), (x_end, ymin), (x_end, ymax), (x_start, ymax)]
-                    poly_h = poly!(ax_uv, [pts]; color=(color, 0.25), strokewidth=0,
-                        xautolimits=false, yautolimits=false)
-                    push!(fraction_poly_handles, poly_h)
-
-                    # Draw fraction number centered in span
-                    x_mid = (x_start + x_end) / 2
-                    y_mid = (ymin + ymax) / 2
-                    txt_h = text!(ax_uv, [x_mid], [y_mid]; text=[string(frac_num)],
-                        fontsize=13, color=:gray40, align=(:center, :center),
-                        xautolimits=false, yautolimits=false)
-                    push!(fraction_text_handles, txt_h)
-                end
+            if x1 > x0
+                push!(starts, x0)
+                push!(ends, x1)
+                push!(colors, FRAC_COLORS[mod1(i, length(FRAC_COLORS))])
+                push!(mids, (x0 + x1) / 2)
+                push!(labels, string(f.fraction_number))
             end
         end
+
+        (starts, ends, colors, mids, labels)
     end
 
-    # Trigger initial draw
-    notify(fraction_vspans_data)
+    frac_xstart = @lift $fraction_spans[1]
+    frac_xend = @lift $fraction_spans[2]
+    frac_colors = @lift $fraction_spans[3]
+    frac_mid_x = @lift $fraction_spans[4]
+    frac_labels = @lift $fraction_spans[5]
+
+    vspan!(ax_uv, frac_xstart, frac_xend;
+        color=frac_colors, alpha=FRAC_ALPHA, xautolimits=false, yautolimits=false)
+    vspan!(ax_pctb, frac_xstart, frac_xend;
+        color=frac_colors, alpha=FRAC_ALPHA, xautolimits=false, yautolimits=false)
+
+    # Fraction number labels in %B panel near baseline (0%)
+    frac_label_y = @lift fill(1.0, length($frac_mid_x))
+    text!(ax_pctb, frac_mid_x, frac_label_y;
+        text=frac_labels, fontsize=12, color=:blue,
+        font=:bold, align=(:center, :bottom),
+        xautolimits=false, yautolimits=false)
 
     # ── Other event text labels on UV panel ────────────────────────────────────
     # Filter other events, keeping only the non-tube-feed events (and zero-transition fraction size changes)
@@ -428,13 +401,13 @@ function _draw_flow_schematic!(ax, app::AppState)
     ln_inj_return = lines!(ax, [x_r, x_c], [y_loop, y_col]; color=:steelblue, linewidth=2.7, visible=false)
     ln_waste_byp = lines!(ax, [x_c, x_l], [y_inj, y_waste_inj]; color=:steelblue, linewidth=2.7, visible=false)
 
-    ln_syr_to_loop = lines!(ax, [x_r, x_r], [y_syr - 0.34, y_loop + 0.34]; color=:orangered3, linewidth=2.1, visible=false)
-    ln_loop_waste = lines!(ax, [x_r, x_r], [y_loop - 0.34, y_waste_loop + 0.34]; color=:orangered3, linewidth=2.1, visible=false)
+    ln_syr_to_loop = lines!(ax, [x_r, x_r], [y_syr - 0.34, y_loop + 0.34]; color=:steelblue, linewidth=2.1, visible=false)
+    ln_loop_waste = lines!(ax, [x_r, x_r], [y_loop - 0.34, y_waste_loop + 0.34]; color=:steelblue, linewidth=2.1, visible=false)
 
     ln_col_to_uv = lines!(ax, [x_c, x_c], [y_col - 0.42, y_uv + 0.42]; color=:steelblue, linewidth=2.5, visible=false)
     ln_uv_to_out = lines!(ax, [x_c, x_c], [y_uv - 0.42, y_out + 0.40]; color=:steelblue, linewidth=2.5, visible=false)
-    ln_out_waste = lines!(ax, [x_c, x_l], [y_out, y_bottom]; color=:steelblue, linewidth=2.4, visible=false)
-    ln_out_frac = lines!(ax, [x_c, x_frac], [y_out, y_bottom]; color=:steelblue, linewidth=2.4, visible=false)
+    ln_out_waste = lines!(ax, [x_c, x_l], [y_out, y_bottom]; color=:gray45, linewidth=2.4, visible=false)
+    ln_out_frac = lines!(ax, [x_c, x_frac], [y_out, y_bottom]; color=:forestgreen, linewidth=2.4, visible=false)
 
     # ── Static symbols ───────────────────────────────────────────────────────
     box!(ax, x_l, y_buf, 1.30, 0.62, "Buffer A"; color=(COL_BUF_A, 0.78), fontsize=8)
@@ -502,8 +475,11 @@ function _draw_flow_schematic!(ax, app::AppState)
         setvisible!(ln_out_frac, has_known_path && out_to_frac)
         setvisible!(ln_out_waste, has_known_path && !out_to_frac)
 
-        inj_poly.color[] = is_unk ? (:red, 0.95) : (:lightgray, 0.94)
-        out_poly.color[] = (:azure2, 0.93)
+        inj_poly.color[] = is_unk ? (:red, 0.95) :
+                           is_wst ? (:gray60, 0.94) :
+                           is_load ? (:lightskyblue1, 0.94) :
+                           is_inj ? (:orange, 0.94) : (:lightgray, 0.94)
+        out_poly.color[] = out_to_frac ? (:lightgreen, 0.93) : (:gray70, 0.93)
 
         inj_txt.text[] = _inject_label(s.inject_value)
         out_txt.text[] = is_unk ? "PATH UNKNOWN" :
