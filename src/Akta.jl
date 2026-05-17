@@ -173,6 +173,7 @@ function main(filename::Union{String,Nothing}=nothing)
     # ── CSV filename prompt ────────────────────────────────────────────────────
     tag = demo_mode ? "demo_" : ""
     default_name = "akta_$(tag)$(Dates.format(Dates.now(), "yyyymmdd_HHMMSS")).csv"
+    sleep(0.5)
     print("Log filename [$default_name]: ")
     input = strip(readline())
     csv_filename = isempty(input) ? default_name : input
