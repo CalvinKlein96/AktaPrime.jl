@@ -243,19 +243,20 @@ function build_gui(app::AppState)::Figure
 
     # ── Status panel + x-axis mode controls ─────────────────────────────────
     top_right = right[1, 1] = GridLayout()
-    # Label(top_right[1, 1], "INSTRUMENT STATUS";
-    #     halign=:left, fontsize=12, font=:bold,
-    #     tellwidth=false, padding=(8, 0, 4, 0))
+
+    Label(top_right[1, 1], "Akta.jl (Waudby group)";
+        halign=:center, fontsize=15, font=:bold,
+        tellwidth=false, padding=(8, 8, 6, 2))
 
     status_text = Observable("")
-    Label(top_right[1, 1], status_text;
+    Label(top_right[2, 1], status_text;
         halign=:left, valign=:top,
         tellwidth=false, tellheight=false,
         fontsize=11, padding=(8, 8, 0, 0))
 
     on(app.inst) do s
         inj = _inject_label(s.inject_value)
-        route = s.fraction_vol_mL > 0 ? "FRACTION COLLECTOR" : "WASTE"
+        route = s.fraction_vol_mL > 0 ? "FRAC COLLECTOR" : "WASTE"
         t_s = @sprintf("%.1f", s.run_time_ms / 1000)
         v = @sprintf("%.4f", s.run_vol_mL)
         status_text[] = """
@@ -264,18 +265,17 @@ Run t:  $t_s s
 Run v:  $v mL
 Valve:  $inj
 Output: $route
-Frac #: $(s.fraction_number)   Frac vol: $(@sprintf("%.2f", s.fraction_vol_mL)) mL
+Frac #: $(s.fraction_number)
+Frac v: $(@sprintf("%.2f", s.fraction_vol_mL)) mL
 Prog:   $(isempty(s.prog_name) ? "---" : s.prog_name)
 Ver:    $(isempty(s.version)   ? "---" : s.version)
 File:   $(basename(app.log_filename))"""
     end
 
-    # rowsize!(top_right, 1, Fixed(24))
-    # rowsize!(top_right, 2, Relative(1.0))
-    rowsize!(right, 1, Fixed(180))
+    rowsize!(right, 1, Fixed(210))
 
     # ── X-axis mode toggle (time vs volume) ─────────────────────────────────
-    mode_grid = top_right[2, 1] = GridLayout()
+    mode_grid = top_right[3, 1] = GridLayout()
     Label(mode_grid[1, 1], "X axis units"; halign=:right, fontsize=11)#, padding=(8, 0, 0, 0))
     mode_toggle = Toggle(mode_grid[1, 2], active=false)
     mode_label = @lift $(mode_toggle.active) ? "Volume (mL)" : "Time (min)"
