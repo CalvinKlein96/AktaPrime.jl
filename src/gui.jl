@@ -109,12 +109,12 @@ function build_gui(app::AppState)::Figure
         isempty(d) ? [TrendPoint(0.0, 0.0, 0.0, 0.0, Int32(0), 0.0, 0.0, 0.0)] : d
     end
     x_mode_is_vol = Observable(false)
-    uv_pts   = @lift [Point2f(_trend_x(p, $x_mode_is_vol), p.uv)        for p in $_trend]
+    uv_pts = @lift [Point2f(_trend_x(p, $x_mode_is_vol), p.uv) for p in $_trend]
     cond_pts = @lift [Point2f(_trend_x(p, $x_mode_is_vol), p.cond_mScm) for p in $_trend]
-    pctb_pts = @lift [Point2f(_trend_x(p, $x_mode_is_vol), p.pctb)      for p in $_trend]
-    pres_pts = @lift [Point2f(_trend_x(p, $x_mode_is_vol), p.pres)      for p in $_trend]
+    pctb_pts = @lift [Point2f(_trend_x(p, $x_mode_is_vol), p.pctb) for p in $_trend]
+    pres_pts = @lift [Point2f(_trend_x(p, $x_mode_is_vol), p.pres) for p in $_trend]
 
-    lines!(ax_uv,   uv_pts,   color=COL_UV,   linewidth=1.5)
+    lines!(ax_uv, uv_pts, color=COL_UV, linewidth=1.5)
     lines!(ax_cond, cond_pts, color=COL_COND, linewidth=1.5)
     lines!(ax_pctb, pctb_pts, color=COL_PCTB, linewidth=1.5)
     lines!(ax_pres, pres_pts, color=COL_PRES, linewidth=1.5)
@@ -166,11 +166,11 @@ function build_gui(app::AppState)::Figure
         (starts, ends, colors, label_pts, labels)
     end
 
-    frac_xstart    = @lift $fraction_spans[1]
-    frac_xend      = @lift $fraction_spans[2]
-    frac_colors    = @lift $fraction_spans[3]
+    frac_xstart = @lift $fraction_spans[1]
+    frac_xend = @lift $fraction_spans[2]
+    frac_colors = @lift $fraction_spans[3]
     frac_label_pts = @lift $fraction_spans[4]
-    frac_labels    = @lift $fraction_spans[5]
+    frac_labels = @lift $fraction_spans[5]
 
     vspan!(ax_uv, frac_xstart, frac_xend;
         color=frac_colors, alpha=FRAC_ALPHA, xautolimits=false, yautolimits=false)
@@ -287,12 +287,6 @@ File:   $(basename(app.log_filename))"""
     on(mode_toggle.active) do by_vol
         x_mode_is_vol[] = by_vol
         ax_pres.xlabel[] = by_vol ? "Volume (mL)" : "Time (min)"
-        if !app.iszoomed[]
-            autolimits!(ax_uv)
-            autolimits!(ax_cond)
-            xautolimits!(ax_pctb)
-            autolimits!(ax_pres)
-        end
     end
 
     # ── Flow path schematic (expanded to rows 2:4) ──────────────────────────
@@ -313,35 +307,14 @@ File:   $(basename(app.log_filename))"""
     notify(app.inst)
 
     # ── Zoom/pan tracking and auto-limit policy ───────────────────────────────
-    app.iszoomed[] = false
-    axes = (ax_uv, ax_cond, ax_pctb, ax_pres)
-    _is_manual_limits(lims) = !isnothing(lims) && lims != (nothing, nothing)
+    # app.iszoomed[] = false
 
-    for ax in axes
-        on(ax.limits) do lims
-            if isnothing(lims) || lims == (nothing, nothing)
-                app.iszoomed[] = false
-                autolimits!(ax_uv)
-                autolimits!(ax_cond)
-                xautolimits!(ax_pctb)
-                autolimits!(ax_pres)
-            end
-        end
-
-        on(ax.finallimits) do _
-            if _is_manual_limits(ax.limits[])
-                app.iszoomed[] = true
-            end
-        end
-    end
+    # axes = (ax_uv, ax_cond, ax_pctb, ax_pres)
 
     on(app.trend_data) do _
-        if !app.iszoomed[]
-            autolimits!(ax_uv)
-            autolimits!(ax_cond)
-            xautolimits!(ax_pctb)
-            autolimits!(ax_pres)
-        end
+        autolimits!(ax_uv)
+        ylims!(ax_cond)
+        ylims!(ax_pres)
     end
 
     return fig
