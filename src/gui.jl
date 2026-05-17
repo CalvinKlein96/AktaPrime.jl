@@ -12,11 +12,11 @@ const COL_BUF_B = RGBf(0.90, 0.80, 0.05)   # yellow
 const FRAC_COLORS = [RGBf(0.8, 0.9, 1.0), RGBf(1.0, 1.0, 0.8)]  # light blue, light yellow
 
 const EVT_COLORS = Dict(
-    EVT_INJECT => (:purple, :dash),
-    EVT_RUN_STATE => (:gray50, :dash),
+    EVT_INJECT => (:hotpink, :solid),
+    EVT_RUN_STATE => (:green, :dash),
     EVT_STEP => (:teal, :dashdot),
-    EVT_TUBEFEED => (:brown, :dot),
-    EVT_LOG => (:gray70, :dot),
+    EVT_TUBEFEED => (:grey50, :solid),
+    EVT_LOG => (:blue, :solid),
     EVT_CONNECT => (:green, :solid),
     EVT_DISCONNECT => (:red, :solid),
 )
@@ -74,26 +74,26 @@ function build_gui(app::AppState)::Figure
     # Nesting gives each side its own row-size control.
     left = fig[1, 1] = GridLayout()
     right = fig[1, 2] = GridLayout()
-    colsize!(fig.layout, 1, Relative(0.72))
-    colsize!(fig.layout, 2, Relative(0.28))
+    colsize!(fig.layout, 1, Relative(0.75))
+    colsize!(fig.layout, 2, Relative(0.25))
 
     # ── Chromatogram axes ─────────────────────────────────────────────────────
     ax_uv = Axis(left[1, 1]; ylabel="UV (AU)", xticklabelsvisible=false,
         ygridvisible=true, xgridvisible=false)
-    ax_cond = Axis(left[2, 1]; ylabel="Cond (mS/cm)", xticklabelsvisible=false,
-        ygridvisible=true, xgridvisible=false)
-    ax_pctb = Axis(left[3, 1]; ylabel="%B", xticklabelsvisible=false,
+    ax_pctb = Axis(left[2, 1]; ylabel="%B", xticklabelsvisible=false,
         ygridvisible=true, xgridvisible=false,
         limits=(nothing, (0, 105)))
+    ax_cond = Axis(left[3, 1]; ylabel="Conductivity (mS/cm)", xticklabelsvisible=false,
+        ygridvisible=true, xgridvisible=false)
     ax_pres = Axis(left[4, 1]; ylabel="Pressure", xlabel="Time (min)",
         ygridvisible=true, xgridvisible=false)
 
     linkxaxes!(ax_uv, ax_cond, ax_pctb, ax_pres)
 
-    for row in 1:4
-        rowsize!(left, row, Relative(0.22))
-    end
-    rowgap!(left, 4)
+    # for row in 1:4
+    #     rowsize!(left, row, Relative(0.22))
+    # end
+    # rowgap!(left, 4)
 
     # ── Data observables ──────────────────────────────────────────────────────
     # Guard: provide a dummy point when empty so GLMakie axis autoscaling
@@ -267,53 +267,55 @@ function build_gui(app::AppState)::Figure
         align=(:center, :top), xautolimits=false, yautolimits=false)
 
     # ── Event legend ──────────────────────────────────────────────────────────
-    legend_elements = [LineElement(color=EVT_COLORS[k][1], linestyle=EVT_COLORS[k][2])
-                       for k in (EVT_INJECT, EVT_RUN_STATE, EVT_STEP, EVT_LOG)]
-    legend_labels = ["Inject", "State", "Step", "Log"]
-    Legend(left[5, 1], legend_elements, legend_labels;
-        orientation=:horizontal, framevisible=false, tellwidth=false,
-        labelsize=11, patchsize=(18, 2))
+    # legend_elements = [LineElement(color=EVT_COLORS[k][1], linestyle=EVT_COLORS[k][2])
+    #                    for k in (EVT_INJECT, EVT_RUN_STATE, EVT_STEP, EVT_LOG)]
+    # legend_labels = ["Inject", "State", "Step", "Log"]
+    # Legend(left[5, 1], legend_elements, legend_labels;
+    #     orientation=:horizontal, framevisible=false, tellwidth=false,
+    #     labelsize=11, patchsize=(18, 2))
 
     # ── Status panel + x-axis mode controls ─────────────────────────────────
     top_right = right[1, 1] = GridLayout()
-    Label(top_right[1, 1], "INSTRUMENT STATUS";
-        halign=:left, fontsize=12, font=:bold,
-        tellwidth=false, padding=(8, 0, 4, 0))
+    # Label(top_right[1, 1], "INSTRUMENT STATUS";
+    #     halign=:left, fontsize=12, font=:bold,
+    #     tellwidth=false, padding=(8, 0, 4, 0))
 
     status_text = Observable("")
-    Label(top_right[2, 1], status_text;
-        halign=:left, valign=:top, tellwidth=false, tellheight=false,
+    Label(top_right[1, 1], status_text;
+        halign=:left, valign=:top,
+        tellwidth=false, tellheight=false,
         fontsize=11, padding=(8, 8, 0, 0))
 
     on(app.inst) do s
         inj = _inject_label(s.inject_value)
-        route = s.fraction_vol_mL > 0 ? "FRAC #$(s.fraction_number)" : "WASTE"
+        route = s.fraction_vol_mL > 0 ? "FRACTION COLLECTOR" : "WASTE"
         t_s = @sprintf("%.1f", s.run_time_ms / 1000)
         v = @sprintf("%.4f", s.run_vol_mL)
         status_text[] = """
-State:  $(rpad(s.run_state, 10))  Valve: $inj
+State:  $(rpad(s.run_state, 10))
 Run t:  $t_s s
 Run v:  $v mL
+Valve:  $inj
+Output: $route
 Frac #: $(s.fraction_number)   Frac vol: $(@sprintf("%.2f", s.fraction_vol_mL)) mL
-Out:    $route
 Prog:   $(isempty(s.prog_name) ? "---" : s.prog_name)
 Ver:    $(isempty(s.version)   ? "---" : s.version)
 File:   $(basename(app.log_filename))"""
     end
 
-    rowsize!(top_right, 1, Fixed(24))
-    rowsize!(top_right, 2, Relative(1.0))
+    # rowsize!(top_right, 1, Fixed(24))
+    # rowsize!(top_right, 2, Relative(1.0))
     rowsize!(right, 1, Fixed(180))
 
     # ── X-axis mode toggle (time vs volume) ─────────────────────────────────
-    mode_grid = top_right[3, 1] = GridLayout()
-    Label(mode_grid[1, 1], "X Axis"; halign=:left, fontsize=11, padding=(8, 0, 0, 0))
+    mode_grid = top_right[2, 1] = GridLayout()
+    Label(mode_grid[1, 1], "X axis units"; halign=:right, fontsize=11)#, padding=(8, 0, 0, 0))
     mode_toggle = Toggle(mode_grid[1, 2], active=false)
     mode_label = @lift $(mode_toggle.active) ? "Volume (mL)" : "Time (min)"
     Label(mode_grid[1, 3], mode_label; halign=:left, fontsize=11)
+    colsize!(mode_grid, 3, Relative(0.72))
     colsize!(mode_grid, 1, Relative(0.28))
     colsize!(mode_grid, 2, Fixed(34))
-    colsize!(mode_grid, 3, Relative(0.72))
 
     on(mode_toggle.active) do by_vol
         x_mode_is_vol[] = by_vol
@@ -328,7 +330,8 @@ File:   $(basename(app.log_filename))"""
 
     # ── Flow path schematic (expanded to rows 2:4) ──────────────────────────
     ax_flow = Axis(right[2:4, 1];
-        title="Flow Path", titlesize=12, aspect=nothing,
+        # title="Flow Path",
+        # titlesize=12, aspect=nothing,
         xgridvisible=false, ygridvisible=false,
         xticksvisible=false, yticksvisible=false,
         xticklabelsvisible=false, yticklabelsvisible=false,
@@ -399,7 +402,7 @@ function _draw_flow_schematic!(ax, app::AppState)
     setvisible!(ln, active) = (ln.visible[] = active)
 
     # ── Node coordinates (staggered vertically for readability) ─────────────
-    x_l, x_c, x_r = 2.2, 4.2, 7.1
+    x_l, x_c, x_r = 1.3, 4.2, 7.1
     x_frac = x_r
 
     y_buf = 11.3
