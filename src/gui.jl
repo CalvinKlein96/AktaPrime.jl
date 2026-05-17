@@ -57,6 +57,12 @@ function _event_label_top(e::AktaEvent)::String
     return string(e.kind)
 end
 
+_trend_x(p::TrendPoint, by_vol::Bool)::Float32 =
+    by_vol ? Float32(p.cum_vol_mL) : Float32(p.cum_time_ms / 60_000)
+
+_event_x(e::AktaEvent, by_vol::Bool)::Float32 =
+    by_vol ? Float32(e.cum_vol_mL) : Float32(e.cum_time_ms / 60_000)
+
 function _fraction_label_bottom(e::AktaEvent)::String
     # Show just the fraction number (no "F#" prefix)
     if (m = match(r"Feed Tube Nr\s+(\d+)", e.text)) !== nothing
@@ -103,19 +109,15 @@ function build_gui(app::AppState)::Figure
         isempty(d) ? [TrendPoint(0.0, 0.0, 0.0, 0.0, Int32(0), 0.0, 0.0, 0.0)] : d
     end
     x_mode_is_vol = Observable(false)
-    x_arr = @lift begin
-        by_vol = $x_mode_is_vol
-        [by_vol ? p.cum_vol_mL : p.cum_time_ms / 60_000 for p in $_trend]
-    end
-    uv_arr = @lift [p.uv for p in $_trend]
-    cond_arr = @lift [p.cond_mScm for p in $_trend]
-    pctb_arr = @lift [p.pctb for p in $_trend]
-    pres_arr = @lift [p.pres for p in $_trend]
+    uv_pts   = @lift [Point2f(_trend_x(p, $x_mode_is_vol), p.uv)        for p in $_trend]
+    cond_pts = @lift [Point2f(_trend_x(p, $x_mode_is_vol), p.cond_mScm) for p in $_trend]
+    pctb_pts = @lift [Point2f(_trend_x(p, $x_mode_is_vol), p.pctb)      for p in $_trend]
+    pres_pts = @lift [Point2f(_trend_x(p, $x_mode_is_vol), p.pres)      for p in $_trend]
 
-    lines!(ax_uv, x_arr, uv_arr, color=COL_UV, linewidth=1.5)
-    lines!(ax_cond, x_arr, cond_arr, color=COL_COND, linewidth=1.5)
-    lines!(ax_pctb, x_arr, pctb_arr, color=COL_PCTB, linewidth=1.5)
-    lines!(ax_pres, x_arr, pres_arr, color=COL_PRES, linewidth=1.5)
+    lines!(ax_uv,   uv_pts,   color=COL_UV,   linewidth=1.5)
+    lines!(ax_cond, cond_pts, color=COL_COND, linewidth=1.5)
+    lines!(ax_pctb, pctb_pts, color=COL_PCTB, linewidth=1.5)
+    lines!(ax_pres, pres_pts, color=COL_PRES, linewidth=1.5)
 
     # ── Event vlines on UV panel ──────────────────────────────────────────────
     # xautolimits/yautolimits=false prevents Makie calling extrema on empty vectors.
@@ -123,10 +125,7 @@ function build_gui(app::AppState)::Figure
         let kind = kind
             color, style = get(EVT_COLORS, kind, (:black, :dash))
             evts_k = @lift filter(e -> e.kind == kind, $(app.events))
-            evt_x_k = @lift begin
-                by_vol = $x_mode_is_vol
-                [by_vol ? e.cum_vol_mL : e.cum_time_ms / 60_000 for e in $evts_k]
-            end
+            evt_x_k = @lift [_event_x(e, $x_mode_is_vol) for e in $evts_k]
             vlines!(ax_uv, evt_x_k; color=(color, 0.55), linestyle=style, linewidth=1.0,
                 xautolimits=false, yautolimits=false)
         end
@@ -141,7 +140,7 @@ function build_gui(app::AppState)::Figure
         starts = Float64[]
         ends = Float64[]
         colors = RGBf[]
-        mids = Float64[]
+        label_pts = Point2f[]
         labels = String[]
 
         for (i, f) in enumerate(fracs)
@@ -159,19 +158,19 @@ function build_gui(app::AppState)::Figure
                 push!(starts, x0)
                 push!(ends, x1)
                 push!(colors, FRAC_COLORS[mod1(i, length(FRAC_COLORS))])
-                push!(mids, (x0 + x1) / 2)
+                push!(label_pts, Point2f((x0 + x1) / 2, 1.0f0))
                 push!(labels, string(f.fraction_number))
             end
         end
 
-        (starts, ends, colors, mids, labels)
+        (starts, ends, colors, label_pts, labels)
     end
 
-    frac_xstart = @lift $fraction_spans[1]
-    frac_xend = @lift $fraction_spans[2]
-    frac_colors = @lift $fraction_spans[3]
-    frac_mid_x = @lift $fraction_spans[4]
-    frac_labels = @lift $fraction_spans[5]
+    frac_xstart    = @lift $fraction_spans[1]
+    frac_xend      = @lift $fraction_spans[2]
+    frac_colors    = @lift $fraction_spans[3]
+    frac_label_pts = @lift $fraction_spans[4]
+    frac_labels    = @lift $fraction_spans[5]
 
     vspan!(ax_uv, frac_xstart, frac_xend;
         color=frac_colors, alpha=FRAC_ALPHA, xautolimits=false, yautolimits=false)
@@ -179,8 +178,7 @@ function build_gui(app::AppState)::Figure
         color=frac_colors, alpha=FRAC_ALPHA, xautolimits=false, yautolimits=false)
 
     # Fraction number labels in %B panel near baseline (0%)
-    frac_label_y = @lift fill(1.0, length($frac_mid_x))
-    text!(ax_pctb, frac_mid_x, frac_label_y;
+    text!(ax_pctb, frac_label_pts;
         text=frac_labels, fontsize=12, color=:blue,
         font=:bold, align=(:center, :bottom),
         xautolimits=false, yautolimits=false)
@@ -222,20 +220,16 @@ function build_gui(app::AppState)::Figure
     end
 
     uv_text_top_y = @lift begin
-        u = $uv_arr
-        ymax = maximum(u)
-        span = max(1e-6, ymax - minimum(u))
+        yvals = [p[2] for p in $uv_pts]
+        ymax = maximum(yvals)
+        span = max(1e-6, ymax - minimum(yvals))
         ymax - 0.05 * span
     end
 
-    evt_top_x = @lift begin
-        by_vol = $x_mode_is_vol
-        [by_vol ? e.cum_vol_mL : e.cum_time_ms / 60_000 for e in $evt_other]
-    end
-    evt_top_y = @lift fill($uv_text_top_y[], length($evt_other))
+    evt_top_pts = @lift [Point2f(_event_x(e, $x_mode_is_vol), $uv_text_top_y) for e in $evt_other]
     evt_top_lbl = @lift [_event_label_top(e) for e in $evt_other]
 
-    text!(ax_uv, evt_top_x, evt_top_y;
+    text!(ax_uv, evt_top_pts;
         text=evt_top_lbl, fontsize=8, color=:gray25,
         align=(:center, :top), xautolimits=false, yautolimits=false)
 
