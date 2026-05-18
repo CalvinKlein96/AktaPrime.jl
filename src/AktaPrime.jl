@@ -1,4 +1,4 @@
-module Akta
+module AktaPrime
 
 using Dates
 using Logging

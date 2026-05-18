@@ -1,4 +1,4 @@
-name = "Akta"
+name = "AktaPrime"
 uuid = "f5a23b8e-4c19-4d2b-b8f3-9e7c1d5a2043"
 version = "0.1.0"
 
@@ -13,5 +13,8 @@ Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 [compat]
 Dates = "1.11.0"
 GLMakie = "0.13.10"
+LibSerialPort = "0.5.2"
 Logging = "1.11.0"
+Observables = "0.5.5"
 Printf = "1.11.0"
+Julia = "1.12.0"
