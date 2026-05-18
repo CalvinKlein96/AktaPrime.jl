@@ -2,7 +2,7 @@
 
 julia_version = "1.12.2"
 manifest_format = "2.0"
-project_hash = "caa965f14e5f670e40123484db6eba74d8ce2a90"
+project_hash = "5a54e9ea5cab5587da0cc47b55f3d4334a9b3a13"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]
@@ -40,7 +40,7 @@ uuid = "35492f91-a3bd-45ad-95db-fcad7dcfedb7"
 version = "1.2.0"
 
 [[deps.Akta]]
-deps = ["GLMakie", "LibSerialPort", "Observables"]
+deps = ["Dates", "GLMakie", "LibSerialPort", "Logging", "Observables", "Preferences", "Printf"]
 path = "."
 uuid = "f5a23b8e-4c19-4d2b-b8f3-9e7c1d5a2043"
 version = "0.1.0"

@@ -5,7 +5,7 @@
 # instead of only logging.
 
 # ── Serial port configuration ─────────────────────────────────────────────────
-const SERIAL_PORT = "/dev/tty.usbserial-110"
+const DEFAULT_SERIAL_PORT = "/dev/tty.usbserial-110"
 const BAUD_RATE = 9600
 
 # ── Timing constants ──────────────────────────────────────────────────────────
@@ -492,9 +492,10 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # run_linklayer — main link-layer loop; call with @async
 # ─────────────────────────────────────────────────────────────────────────────
-function run_linklayer(tx_queue::Channel, shutdown::Ref{Bool}, app::AppState)
-    @info "Opening $SERIAL_PORT at $BAUD_RATE baud"
-    sp = LibSerialPort.open(SERIAL_PORT, BAUD_RATE)
+function run_linklayer(tx_queue::Channel, shutdown::Ref{Bool}, app::AppState,
+    serial_port::AbstractString=DEFAULT_SERIAL_PORT)
+    @info "Opening $serial_port at $BAUD_RATE baud"
+    sp = LibSerialPort.open(serial_port, BAUD_RATE)
     set_flow_control(sp; rts=SP_RTS_ON, cts=SP_CTS_IGNORE, dtr=SP_DTR_ON, dsr=SP_DSR_IGNORE)
 
     st = LinkState()

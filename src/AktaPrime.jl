@@ -6,6 +6,7 @@ using Printf
 using Observables
 using GLMakie
 using LibSerialPort
+using Preferences
 
 include("types.jl")
 include("csv_writer.jl")   # must come before protocol (push_event! calls write_csv_event)
@@ -13,6 +14,43 @@ include("protocol.jl")
 include("gui.jl")
 
 export main
+
+const SERIAL_PORT_PREFERENCE_KEY = "serial_port"
+
+_is_logfile_arg(path::AbstractString)::Bool = endswith(lowercase(path), ".csv")
+
+function _effective_serial_port(serial_override::Union{Nothing,AbstractString})::String
+    if serial_override === nothing
+        return @load_preference(SERIAL_PORT_PREFERENCE_KEY, DEFAULT_SERIAL_PORT)
+    end
+    serial_port = String(serial_override)
+    @set_preferences!(SERIAL_PORT_PREFERENCE_KEY => serial_port)
+    return serial_port
+end
+
+function _run_replay(filename::AbstractString)
+    filename_str = String(filename)
+    isfile(filename_str) || (@error "File not found: $filename_str"; return)
+    @info "Replay mode - loading \"$filename_str\""
+
+    app = AppState()
+    load_csv_log!(app, filename_str)
+    app.log_filename = filename_str
+
+    fig = build_gui(app)
+    screen = display(fig)
+    @info "GUI opened (replay)"
+
+    Base.exit_on_sigint(false)
+    try
+        while isopen(screen)
+            sleep(0.05)
+        end
+    catch e
+        e isa InterruptException || rethrow()
+        @info "Interrupted"
+    end
+end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # run_demo — simulated Akta data stream for testing without hardware
@@ -96,44 +134,20 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # main — application entry point
 # ─────────────────────────────────────────────────────────────────────────────
-function main(filename::Union{String,Nothing}=nothing)
+function _run_live(serial_override::Union{Nothing,AbstractString}=nothing)
     global_logger(ConsoleLogger(stderr, Logging.Info))
-
-    # ── Replay mode: load an existing CSV log and display it ──────────────────
-    if filename !== nothing
-        isfile(filename) || (@error "File not found: $filename"; return)
-        @info "Replay mode — loading \"$filename\""
-
-        app = AppState()
-        load_csv_log!(app, filename)
-        app.log_filename = filename
-
-        fig = build_gui(app)
-        screen = display(fig)
-        @info "GUI opened (replay)"
-
-        Base.exit_on_sigint(false)
-        try
-            while isopen(screen)
-                sleep(0.05)
-            end
-        catch e
-            e isa InterruptException || rethrow()
-            @info "Interrupted"
-        end
-        return
-    end
 
     # ── Live / demo mode ──────────────────────────────────────────────────────
     @info "Akta PRIME logger starting"
+    serial_port = _effective_serial_port(serial_override)
 
     # ── Check serial port availability ─────────────────────────────────────────
     demo_mode = false
     try
-        sp_check = LibSerialPort.open(SERIAL_PORT, BAUD_RATE)
+        sp_check = LibSerialPort.open(serial_port, BAUD_RATE)
         LibSerialPort.close(sp_check)
     catch
-        @warn "Serial port $SERIAL_PORT not available — will use demo mode"
+        @warn "Serial port $serial_port not available - will use demo mode"
         demo_mode = true
     end
 
@@ -148,8 +162,8 @@ function main(filename::Union{String,Nothing}=nothing)
         yield()   # let the task push EVT_CONNECT before we begin polling
         t
     else
-        @info "Connecting to Akta at $SERIAL_PORT…"
-        @async Base.invokelatest(run_linklayer, tx_queue, shutdown, app)
+        @info "Connecting to Akta at $serial_port..."
+        @async Base.invokelatest(run_linklayer, tx_queue, shutdown, app, serial_port)
     end
 
     # ── Wait for EVT_CONNECT ───────────────────────────────────────────────────
@@ -203,6 +217,33 @@ function main(filename::Union{String,Nothing}=nothing)
         catch
         end
     end
+end
+
+function main()
+    _run_live(nothing)
+end
+
+function main(arg::AbstractString)
+    if _is_logfile_arg(arg)
+        global_logger(ConsoleLogger(stderr, Logging.Info))
+        _run_replay(arg)
+        return
+    end
+    _run_live(arg)
+end
+
+function main(args::Vector{String})
+    if isempty(args)
+        return main()
+    elseif length(args) == 1
+        return main(args[1])
+    end
+    @error "Usage: AktaPrime [serial_port|logfile.csv]"
+    return
+end
+
+function (@main)(args)
+    main(collect(args))
 end
 
 end # module
