@@ -244,7 +244,7 @@ function build_gui(app::AppState)::Figure
     # ── Status panel + x-axis mode controls ─────────────────────────────────
     top_right = right[1, 1] = GridLayout()
 
-    Label(top_right[1, 1], "Akta.jl (Waudby group)";
+    Label(top_right[1, 1], "AktaPrime.jl (v0.1.0)";
         halign=:center, fontsize=15, font=:bold,
         tellwidth=false, padding=(8, 8, 6, 2))
 
