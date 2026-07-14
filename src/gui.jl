@@ -24,9 +24,9 @@ const EVT_COLORS = Dict(
 )
 
 _inject_label(v::InjectValue) =
-    v == IV_LOAD ? "load" :
-    v == IV_INJECT ? "inject" :
-    v == IV_WASTE ? "waste" : "unknown"
+    v == IV_LOAD ? "LOAD" :
+    v == IV_INJECT ? "INJECT" :
+    v == IV_WASTE ? "WASTE" : "UNKNOWN"
 
 function _event_label_top(e::AktaEvent)::String
     if e.kind == EVT_INJECT
@@ -271,7 +271,7 @@ function build_gui(app::AppState)::Figure
         halign=:left, justification=:left, tellwidth=false, fontsize=13)
 
     on(app.inst) do s
-        inj = _inject_label(s.inject_value)
+        inj = lowercase(_inject_label(s.inject_value))
         route = s.fraction_vol_mL > 0 ? "frac collector" : "waste"
         t_s = @sprintf("%.1f", s.run_time_ms / 1000)
         v = @sprintf("%.4f", s.run_vol_mL)
@@ -427,26 +427,26 @@ function _draw_flow_schematic!(ax, app::AppState)
     # ── Static symbols ───────────────────────────────────────────────────────
     # The mixer box itself is drawn below as a live %B-coloured poly, so it is
     # deliberately omitted here to avoid a doubled label.
-    box!(ax, x_l, y_buf, 1.30, 0.62, "Buffer A"; color=(COL_BUF_A, 0.78), fontsize=10)
-    box!(ax, x_frac, y_buf, 1.30, 0.62, "Buffer B"; color=(COL_BUF_B, 0.78), fontsize=10)
-    inj_poly = diamond!(ax, x_c, y_inj, 1.55, 0.92; color=(:lightgray, 0.94))
-    box!(ax, x_c, y_col, 1.35, 0.74, "COLUMN"; color=(:wheat, 0.93), fontsize=10)
-    box!(ax, x_c, y_uv, 1.48, 0.78, "UV / COND"; color=(:lightyellow, 0.93), fontsize=10)
-    out_poly = diamond!(ax, x_c, y_out, 1.30, 0.84; color=(:azure2, 0.93))
-    box!(ax, x_r, y_syr, 1.45, 0.62, "SYRINGE"; color=(:mistyrose2, 0.88), fontsize=10)
-    box!(ax, x_r, y_loop, 1.20, 0.62, "LOOP"; color=(:gray95, 0.93), fontsize=10)
-    box!(ax, x_frac, y_bottom, 1.25, 0.68, "FRAC"; color=(:lightgreen, 0.90), fontsize=10)
-    box!(ax, x_l, y_bottom, 1.30, 0.62, "WASTE"; color=(:gray92, 0.95), fontsize=10)
-    box!(ax, x_r, y_waste_loop, 1.30, 0.62, "WASTE"; color=(:gray92, 0.95), fontsize=10)
-    box!(ax, x_l, y_waste_inj, 1.30, 0.62, "WASTE"; color=(:gray92, 0.95), fontsize=10)
+    box!(ax, x_l, y_buf, 1.30, 0.62, "Buffer A"; color=COL_BUF_A, fontsize=11)
+    box!(ax, x_frac, y_buf, 1.30, 0.62, "Buffer B"; color=COL_BUF_B, fontsize=11)
+    inj_poly = diamond!(ax, x_c, y_inj, 1.55, 0.92; color=:lightgray)
+    box!(ax, x_c, y_col, 1.35, 0.74, "COLUMN"; color=:wheat, fontsize=11)
+    box!(ax, x_c, y_uv, 1.48, 0.78, "UV / COND"; color=:lightyellow, fontsize=11)
+    out_poly = diamond!(ax, x_c, y_out, 1.30, 0.84; color=:azure2)
+    box!(ax, x_r, y_syr, 1.45, 0.62, "SYRINGE"; color=:mistyrose2, fontsize=11)
+    box!(ax, x_r, y_loop, 1.20, 0.62, "LOOP"; color=:gray95, fontsize=11)
+    box!(ax, x_frac, y_bottom, 1.25, 0.68, "FRAC"; color=:lightgreen, fontsize=11)
+    box!(ax, x_l, y_bottom, 1.30, 0.62, "WASTE"; color=:gray92, fontsize=11)
+    box!(ax, x_r, y_waste_loop, 1.30, 0.62, "WASTE"; color=:gray92, fontsize=11)
+    box!(ax, x_l, y_waste_inj, 1.30, 0.62, "WASTE"; color=:gray92, fontsize=11)
 
     # ── MIXER — colour blends BufA→BufB by %B ────────────────────────────────
     mixer_color = @lift begin
         td = $(app.trend_data)
         f = isempty(td) ? 0.0 : clamp(td[end].pctb / 100.0, 0.0, 1.0)
-        RGBAf((1 - f) * COL_BUF_A.r + f * COL_BUF_B.r,
+        RGBf((1 - f) * COL_BUF_A.r + f * COL_BUF_B.r,
             (1 - f) * COL_BUF_A.g + f * COL_BUF_B.g,
-            (1 - f) * COL_BUF_A.b + f * COL_BUF_B.b, 0.9)
+            (1 - f) * COL_BUF_A.b + f * COL_BUF_B.b)
     end
     poly!(ax, Rect2f(x_c - 0.65, y_mix - 0.36, 1.30, 0.72);
         color=mixer_color, strokecolor=:black, strokewidth=1)
@@ -454,14 +454,14 @@ function _draw_flow_schematic!(ax, app::AppState)
         td = $(app.trend_data)
         isempty(td) ? "MIX" : @sprintf("%.0f%%B", td[end].pctb)
     end
-    text!(ax, x_c, y_mix; text=mixer_label, fontsize=10,
+    text!(ax, x_c, y_mix; text=mixer_label, fontsize=11,
         align=(:center, :center), font=:bold)
 
-    inj_txt = text!(ax, x_c, y_inj; text="load", fontsize=10,
+    inj_txt = text!(ax, x_c, y_inj; text="LOAD", fontsize=11,
         align=(:center, :center), font=:bold, color=:black)
-    text!(ax, x_c, y_out; text="OUT", fontsize=10,
+    text!(ax, x_c, y_out; text="OUT", fontsize=11,
         align=(:center, :center), font=:bold, color=:black)
-    out_txt = text!(ax, x_c, y_out - 0.95; text="to waste", fontsize=10,
+    out_txt = text!(ax, x_c, y_out - 0.95; text="TO WASTE", fontsize=11,
         align=(:center, :center), font=:bold, color=:gray35)
 
     on(app.inst) do s
@@ -491,27 +491,14 @@ function _draw_flow_schematic!(ax, app::AppState)
         setvisible!(ln_out_frac, has_known_path && out_to_frac)
         setvisible!(ln_out_waste, has_known_path && !out_to_frac)
 
-        inj_poly.color[] = is_unk ? (:red, 0.95) :
-                           is_wst ? (:gray60, 0.94) :
-                           is_load ? (:lightskyblue1, 0.94) :
-                           is_inj ? (:orange, 0.94) : (:lightgray, 0.94)
-        out_poly.color[] = out_to_frac ? (:lightgreen, 0.93) : (:gray70, 0.93)
+        inj_poly.color[] = is_unk ? :red :
+                           is_wst ? :gray60 :
+                           is_load ? :lightskyblue1 :
+                           is_inj ? :orange : :lightgray
+        out_poly.color[] = out_to_frac ? :lightgreen : :gray70
 
         inj_txt.text[] = _inject_label(s.inject_value)
-        out_txt.text[] = is_unk ? "path unknown" :
-                         (out_to_frac ? "to frac #$(s.fraction_number)" : "to waste")
+        out_txt.text[] = is_unk ? "PATH UNKNOWN" :
+                         (out_to_frac ? "TO FRAC #$(s.fraction_number)" : "TO WASTE")
     end
-
-    # ── Run-state banner ──────────────────────────────────────────────────────
-    state_text = @lift $(app.inst).run_state
-    state_color = @lift begin
-        s = $(app.inst).run_state
-        s == "Run" ? (:green, 1.0) :
-        s == "Pause" ? (:orange, 1.0) :
-        s == "Hold" ? (:orange, 1.0) :
-        s == "Continue" ? (:blue, 1.0) :
-        s == "End" ? (:red, 1.0) : (:gray, 1.0)
-    end
-    text!(ax, 1.6, 10.6; text=state_text, fontsize=14, font=:bold,
-        align=(:center, :center), color=state_color)
 end

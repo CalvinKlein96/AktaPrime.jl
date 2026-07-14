@@ -16,6 +16,7 @@ include("gui.jl")
 export main
 
 const SERIAL_PORT_PREFERENCE_KEY = "serial_port"
+const GITHUB_URL = "https://github.com/waudbylab/AktaPrime.jl"
 
 _is_logfile_arg(path::AbstractString)::Bool = endswith(lowercase(path), ".csv")
 
@@ -165,17 +166,17 @@ end
 function _run_live(serial_override::Union{Nothing,AbstractString}=nothing)
     global_logger(ConsoleLogger(stderr, Logging.Info))
 
-    # ── Live / demo mode ──────────────────────────────────────────────────────
-    @info "Akta PRIME logger starting"
     serial_port = _effective_serial_port(serial_override)
 
-    # ── Check serial port availability ─────────────────────────────────────────
+    # ── Is an instrument reachable on the serial port? ─────────────────────────
+    # If the port cannot be opened we fall back to demo mode; this is a normal,
+    # expected path (e.g. no instrument connected), not an error — the friendly
+    # startup banner below explains it and how to connect a real instrument.
     demo_mode = false
     try
         sp_check = LibSerialPort.open(serial_port, BAUD_RATE)
         LibSerialPort.close(sp_check)
     catch
-        @warn "Serial port $serial_port not available - will use demo mode"
         demo_mode = true
     end
 
@@ -185,7 +186,7 @@ function _run_live(serial_override::Union{Nothing,AbstractString}=nothing)
 
     # ── Choose a log-file prefix and open the first file *before* acquisition ──
     # starts, so nothing is ever recorded before the user has named the output.
-    app.log_prefix = _prompt_log_prefix(demo_mode)
+    app.log_prefix = _prompt_log_prefix(demo_mode, serial_port)
     csv_filename = newlogname(app)
     app.csv_io = init_csv(csv_filename)
     app.log_filename = csv_filename
@@ -247,36 +248,79 @@ function _run_live(serial_override::Union{Nothing,AbstractString}=nothing)
 end
 
 # Print friendly startup help and read the log-file prefix from the console.
-function _prompt_log_prefix(demo_mode::Bool)::String
+function _prompt_log_prefix(demo_mode::Bool, serial_port::AbstractString)::String
     default_prefix = demo_mode ? "akta_demo" : "akta"
-    bar = "─"^62
+    bar = "─"^64
     println()
     println(bar)
-    println("  Akta PRIME logger" * (demo_mode ? "  (demo mode — no instrument found)" : ""))
+    println("  AktaPrime.jl — Akta PRIME logger")
+    println("  $GITHUB_URL")
     println(bar)
-    println("  Data are logged as CSV files in the current folder:")
+    println()
+
+    if demo_mode
+        println("  No instrument was found on the serial port:")
+        println("      $serial_port")
+        println()
+        println("  Starting in DEMO MODE with simulated data, so you can explore")
+        println("  the interface without an instrument connected.")
+        println()
+        println("  To use a real Akta PRIME instead:")
+        println()
+        println("    1. Connect the instrument to this computer's serial port,")
+        println("       directly or via a USB-to-serial adaptor, and switch it on.")
+        println()
+        println("    2. Restart the app, giving it the port name, for example:")
+        println()
+        println("           AktaPrime $serial_port")
+        println()
+        println("       The port name is remembered, so next time you can just")
+        println("       run  AktaPrime  on its own.")
+        println()
+    else
+        println("  Using serial port:")
+        println("      $serial_port")
+        println()
+        println("  The instrument will be contacted once you have chosen a prefix.")
+        println()
+    end
+
+    println(bar)
+    println()
+    println("  Data are saved as CSV files in the current folder:")
+    println()
     println("      $(pwd())")
     println()
-    println("  Each run is saved to its own file, named:")
+    println("  Each run is written to its own file, named:")
+    println()
     println("      <prefix>_<date>_<time>.csv")
+    println()
     println("  A fresh file is started automatically whenever a new run begins,")
     println("  so successive runs never overwrite or overlap one another.")
     println()
-    println("  The prefix is just a label to help you find these files later —")
-    println("  e.g. a sample name or your initials.")
-    print("  Log-file prefix [$default_prefix]: ")
+    println("  The prefix is simply a label to help you find these files later,")
+    println("  such as a sample name or your initials.")
+    println()
+    println(bar)
+    println()
+    print("  Log-file prefix  (press ENTER for \"$default_prefix\"): ")
     input = strip(readline())
     return isempty(input) ? default_prefix : String(input)
 end
 
 # Tell the user where their data ended up when logging stops.
 function _report_output(app::AppState)
-    bar = "─"^62
+    bar = "─"^64
     println()
     println(bar)
     @info "Logging stopped — $(length(app.trend_data[])) trend points in the final run"
-    println("  Data saved in:   $(pwd())")
-    println("  Files this session are named:  $(app.log_prefix)_<date>_<time>.csv")
+    println()
+    println("  Data saved in:")
+    println("      $(pwd())")
+    println()
+    println("  Files this session are named:")
+    println("      $(app.log_prefix)_<date>_<time>.csv")
+    println()
     println("  Most recent run: $(basename(app.log_filename))")
     println(bar)
 end
