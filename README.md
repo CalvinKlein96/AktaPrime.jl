@@ -8,6 +8,12 @@ AktaPrime is a Julia app for logging and visualising GE/Cytiva **ÄKTA Prime plu
 chromatography data — an open replacement for the discontinued PrimeView control
 software.
 
+> **Disclaimer.** AktaPrime.jl is an **independent, unofficial** project. It is
+> **not affiliated with, authorised, endorsed, or supported by Cytiva** (formerly
+> GE Healthcare) or any related entity. "ÄKTA", "ÄKTA Prime", "PrimeView" and
+> "UNICORN" are trademarks of their respective owners and are used here only to
+> identify the hardware and software with which this project interoperates.
+
 ![AktaPrime screenshot](assets/screenshot.png)
 
 ## Documentation

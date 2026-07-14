@@ -33,11 +33,15 @@ jobs:
           sudo apt-get install -y xvfb xorg-dev mesa-utils libgl1 freeglut3-dev \
             libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev
       - name: Instantiate, precompile and load AktaPrime
+        # NB: `import` (not `using`) — `using AktaPrime` would bring the
+        # `@main`-annotated `main` into `Main`, which Julia 1.12 auto-runs when
+        # the script ends, launching the app into an endless demo loop.
         run: |
           xvfb-run -a julia --project=. -e '
             using Pkg
             Pkg.instantiate()
             Pkg.precompile()
-            using AktaPrime
+            import AktaPrime
+            @assert isdefined(AktaPrime, :main)
             println("AktaPrime loaded OK")
           '
