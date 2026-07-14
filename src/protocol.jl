@@ -232,11 +232,12 @@ function _handle_trend_data(data::Vector{UInt8}, app::AppState)
 
     uv = uv_raw / 1e6
     cond = cond_raw / 1e3
+    ph = ph_raw / 100.0
     pctb = pctb_raw / 10.0
     pres = pres_raw / 1e3
     temp = temp_raw / 10.0
 
-    pt = TrendPoint(inst.cum_time_ms, inst.cum_vol_mL, uv, cond, ph_raw, pctb, pres, temp)
+    pt = TrendPoint(inst.cum_time_ms, inst.cum_vol_mL, uv, cond, ph, pctb, pres, temp)
     push!(app.trend_data[], pt)
     notify(app.trend_data)
     write_csv_trend(app, pt)
@@ -254,6 +255,12 @@ function _handle_base_time_vol(data::Vector{UInt8}, app::AppState)
     base_vol_mL = Float64(UInt32(data[5]) | (UInt32(data[6]) << 8) |
                           (UInt32(data[7]) << 16) | (UInt32(data[8]) << 24)) / 100.0
     inst = app.inst[]
+    # A base that jumps backwards means the instrument's run counter has
+    # restarted — a new run. Roll to a fresh log so traces do not overlap.
+    if base_time_ms < inst.cum_time_ms
+        rolllog!(app)
+        inst = app.inst[]
+    end
     inst.cum_time_ms = base_time_ms
     inst.cum_vol_mL = base_vol_mL
     notify(app.inst)
@@ -261,6 +268,11 @@ function _handle_base_time_vol(data::Vector{UInt8}, app::AppState)
 end
 
 _inject_from_runstate(raw::UInt8) = raw == 0x00 ? IV_LOAD : IV_INJECT
+
+# A genuine new run: entering "Run" from an ended or idle state (not a resume
+# from Pause/Hold/Continue, which stay within the same run).
+_is_run_start(prev::AbstractString, now::AbstractString) =
+    now == "Run" && (prev == "End" || prev == "---")
 
 function _set_inject_from_log!(text::String, inst::InstrumentState)::Bool
     msg = lowercase(strip(text))
@@ -312,6 +324,14 @@ function _handle_run_state(data::Vector{UInt8}, app::AppState)
 
     inst = app.inst[]
     changed = inst.run_state != state_name || inst.inject_value != inject
+
+    # Roll to a fresh log on a new run before recording anything for it, so the
+    # run-start event and its trend data land in the new file.
+    if _is_run_start(inst.run_state, state_name)
+        rolllog!(app)
+        inst = app.inst[]
+    end
+
     inst.run_state = state_name
     inst.run_time_ms = run_time_ms
     inst.run_vol_mL = run_vol_mL

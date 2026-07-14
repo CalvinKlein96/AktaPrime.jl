@@ -1,2 +1,4 @@
 .claude
 *.csv
+docs/build
+*figure*.pdf

@@ -6,9 +6,9 @@ struct TrendPoint
     cum_vol_mL::Float64   # cumulative run volume from base, mL
     uv::Float64   # UV absorbance, AU
     cond_mScm::Float64   # conductivity, mS/cm
-    ph_raw::Int32     # pH 11-bit ADC value (scale TBD)
+    ph::Float64   # pH (dimensionless; raw ÷ 100 — scaling documented, unconfirmed on hardware)
     pctb::Float64   # gradient %B (0–100)
-    pres::Float64   # pressure (raw ÷ 1000; unit TBD)
+    pres_MPa::Float64   # pressure, MPa (raw ÷ 1000)
     temp_degC::Float64   # temperature, °C
 end
 
@@ -85,6 +85,9 @@ mutable struct AppState
 
     # log filename shown in the GUI status panel
     log_filename::String
+
+    # base name for rolled-over log files ("<prefix>_<timestamp>.csv" per run)
+    log_prefix::String
 end
 
 AppState() = AppState(
@@ -96,6 +99,7 @@ AppState() = AppState(
     "",
     nothing,
     "",
+    "akta",
 )
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -177,6 +181,33 @@ function update_fraction_state!(app::AppState)::Bool
     end
 
     return changed
+end
+
+"""
+Clear all per-run state so a fresh run starts from an empty display: empties
+the trend, event and fraction collections and resets the instrument
+accumulators (keeping programme name and version).  Notifies every observable.
+"""
+function resetrun!(app::AppState)
+    empty!(app.trend_data[])
+    empty!(app.events[])
+    empty!(app.fractions[])
+
+    inst = app.inst[]
+    inst.cum_time_ms = 0.0
+    inst.cum_vol_mL = 0.0
+    inst.run_time_ms = 0.0
+    inst.run_vol_mL = 0.0
+    inst.step_time_ms = 0.0
+    inst.step_vol_mL = 0.0
+    inst.fraction_number = 1
+    inst.fraction_vol_mL = 0.0
+    inst.current_fraction_idx = nothing
+
+    notify(app.trend_data)
+    notify(app.events)
+    notify(app.fractions)
+    notify(app.inst)
 end
 
 function push_event!(app::AppState, kind::EventKind, text::String)

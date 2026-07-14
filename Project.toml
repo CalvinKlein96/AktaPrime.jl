@@ -3,6 +3,7 @@ uuid = "f5a23b8e-4c19-4d2b-b8f3-9e7c1d5a2043"
 version = "0.1.0"
 
 [deps]
+CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 GLMakie = "e9467ef8-e4e7-5192-8a1a-b1aee30e663a"
 LibSerialPort = "a05a14c7-6e3b-5ba9-90a2-45558833e1df"
@@ -12,8 +13,9 @@ Preferences = "21216c6a-2e73-6563-6e65-726566657250"
 Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 
 [compat]
+CairoMakie = "0.15"
 Dates = "1.11.0"
-GLMakie = "0.13.10"
+GLMakie = "0.13"
 LibSerialPort = "0.5.2"
 Logging = "1.11.0"
 Observables = "0.5.5"
@@ -21,5 +23,4 @@ Preferences = "1.5.2"
 Printf = "1.11.0"
 julia = "1.12.0"
 
-[apps]
-AktaPrime = {}
+[apps.AktaPrime]

@@ -1,7 +1,7 @@
 # csv_writer.jl — CSV logging, flushed after every row
 
 const CSV_HEADER = "wall_time,cum_time_ms,cum_vol_mL,type," *
-                   "uv_AU,cond_mScm,ph_raw,pctb_pct,pres,temp_degC,message\n"
+                   "uv_AU,cond_mScm,ph,pctb_pct,pres_MPa,temp_degC,message\n"
 
 """Open (or create) a CSV log file and write the header."""
 function init_csv(filename::String)::IO
@@ -13,13 +13,36 @@ function init_csv(filename::String)::IO
     return io
 end
 
+"""Timestamped log-file name for the app's current prefix: `<prefix>_<stamp>.csv`."""
+function newlogname(app::AppState)::String
+    prefix = isempty(app.log_prefix) ? "akta" : app.log_prefix
+    "$(prefix)_$(Dates.format(Dates.now(), "yyyymmdd_HHMMSS")).csv"
+end
+
+"""
+Start a fresh log file for a new run: close the current CSV, open a new
+timestamped one and clear the display.  A no-op (returning `false`) when the
+current log holds no trend data yet, so back-to-back run-start signals and the
+first run after connecting do not spawn empty files.
+"""
+function rolllog!(app::AppState)::Bool
+    isempty(app.trend_data[]) && return false
+    isnothing(app.csv_io) || close(app.csv_io)
+    name = newlogname(app)
+    app.csv_io = init_csv(name)
+    app.log_filename = name
+    resetrun!(app)
+    @info "New run detected — logging to $name"
+    return true
+end
+
 function write_csv_trend(app::AppState, pt::TrendPoint)
     isnothing(app.csv_io) && return
     io = app.csv_io
     t = Dates.now()
-    @printf(io, "%s,%.1f,%.6f,TREND,%.8f,%.4f,%d,%.2f,%.4f,%.2f,\n",
+    @printf(io, "%s,%.1f,%.6f,TREND,%.8f,%.4f,%.2f,%.2f,%.4f,%.2f,\n",
         t, pt.cum_time_ms, pt.cum_vol_mL,
-        pt.uv, pt.cond_mScm, pt.ph_raw, pt.pctb, pt.pres, pt.temp_degC)
+        pt.uv, pt.cond_mScm, pt.ph, pt.pctb, pt.pres_MPa, pt.temp_degC)
     flush(io)
 end
 
@@ -103,7 +126,7 @@ function load_csv_log!(app::AppState, filename::String)
                 length(parts) < 10 && continue
                 uv = something(tryparse(Float64, parts[5]), 0.0)
                 cond = something(tryparse(Float64, parts[6]), 0.0)
-                ph = something(tryparse(Int32, parts[7]), Int32(0))
+                ph = something(tryparse(Float64, parts[7]), 0.0)
                 pctb = something(tryparse(Float64, parts[8]), 0.0)
                 pres = something(tryparse(Float64, parts[9]), 0.0)
                 temp = something(tryparse(Float64, parts[10]), 0.0)

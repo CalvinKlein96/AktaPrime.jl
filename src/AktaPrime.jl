@@ -5,6 +5,7 @@ using Logging
 using Printf
 using Observables
 using GLMakie
+import CairoMakie   # used only to export plots to PDF; GLMakie stays the interactive backend
 using LibSerialPort
 using Preferences
 
@@ -16,6 +17,7 @@ include("gui.jl")
 export main
 
 const SERIAL_PORT_PREFERENCE_KEY = "serial_port"
+const GITHUB_URL = "https://github.com/waudbylab/AktaPrime.jl"
 
 _is_logfile_arg(path::AbstractString)::Bool = endswith(lowercase(path), ".csv")
 
@@ -37,7 +39,9 @@ function _run_replay(filename::AbstractString)
     load_csv_log!(app, filename_str)
     app.log_filename = filename_str
 
-    fig = build_gui(app)
+    # activate!: ensure the interactive backend (not CairoMakie, used for PDF export)
+    GLMakie.activate!(; title="AktaPrime Viewer")
+    fig = build_gui(app; viewer=true)
     screen = display(fig)
     @info "GUI opened (replay)"
 
@@ -55,10 +59,28 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # run_demo — simulated Akta data stream for testing without hardware
 # ─────────────────────────────────────────────────────────────────────────────
+const DEMO_FRACTIONS_PER_RUN = 20
+
 function run_demo(shutdown::Ref{Bool}, app::AppState)
     push_event!(app, EVT_CONNECT, "Demo mode — simulated Akta")
+
+    # Repeat runs indefinitely. Each run ends after DEMO_FRACTIONS_PER_RUN
+    # fractions; the next one rolls over to a fresh log file (via rolllog!),
+    # exercising the automatic per-run restart of logging.
+    run_index = 0
+    while !shutdown[]
+        run_index += 1
+        run_index > 1 && rolllog!(app)   # counter restarts → new file, cleared display
+        _run_demo_run(shutdown, app)
+    end
+end
+
+# One simulated chromatographic run: streams until shutdown or until
+# DEMO_FRACTIONS_PER_RUN fractions have been collected, then ends the run.
+function _run_demo_run(shutdown::Ref{Bool}, app::AppState)
     app.inst[].run_state = "Run"
     notify(app.inst)
+    push_event!(app, EVT_RUN_STATE, "Run state: Run  inject=IV_LOAD")
 
     # 2 s of simulated time per step, 0.2 s sleep → 10× real-time speedup.
     # Flow rate varies between 0.5–2.0 mL/min so time and volume axes diverge visibly.
@@ -79,6 +101,7 @@ function run_demo(shutdown::Ref{Bool}, app::AppState)
         uv = 0.02 + 1.2 * exp(-((t_min - 4.0)^2) / (2 * 0.4^2)) +
              0.5 * exp(-((t_min - 6.5)^2) / (2 * 0.2^2))
         cond = 10.0 + 2.0 * sin(t_min * 0.5)
+        ph = 7.0 + 0.4 * sin(t_min * 0.3)
         pctb = clamp(t_min < 3.0 ? 5.0 : 5.0 + 30.0 * (t_min - 3.0), 5.0, 100.0)
         pres = 0.40 + 0.02 * sin(t_min * 2.0)
 
@@ -87,7 +110,7 @@ function run_demo(shutdown::Ref{Bool}, app::AppState)
         s.cum_time_ms = t_ms
         s.cum_vol_mL = v_mL
 
-        pt = TrendPoint(t_ms, v_mL, uv, cond, Int32(512), pctb, pres, 22.0)
+        pt = TrendPoint(t_ms, v_mL, uv, cond, ph, pctb, pres, 22.0)
         push!(app.trend_data[], pt)
         notify(app.trend_data)
         write_csv_trend(app, pt)
@@ -127,6 +150,15 @@ function run_demo(shutdown::Ref{Bool}, app::AppState)
             end
             notify(app.inst)
             push_event!(app, EVT_TUBEFEED, "Feed Tube Nr $(app.inst[].fraction_number)")
+
+            # End this run once enough fractions have been collected.
+            if app.inst[].fraction_number >= DEMO_FRACTIONS_PER_RUN
+                app.inst[].run_state = "End"
+                notify(app.inst)
+                push_event!(app, EVT_RUN_STATE, "Run state: End  inject=IV_LOAD")
+                sleep(1.0)   # brief pause so the ended run is visible before restart
+                return
+            end
         end
     end
 end
@@ -137,23 +169,30 @@ end
 function _run_live(serial_override::Union{Nothing,AbstractString}=nothing)
     global_logger(ConsoleLogger(stderr, Logging.Info))
 
-    # ── Live / demo mode ──────────────────────────────────────────────────────
-    @info "Akta PRIME logger starting"
     serial_port = _effective_serial_port(serial_override)
 
-    # ── Check serial port availability ─────────────────────────────────────────
+    # ── Is an instrument reachable on the serial port? ─────────────────────────
+    # If the port cannot be opened we fall back to demo mode; this is a normal,
+    # expected path (e.g. no instrument connected), not an error — the friendly
+    # startup banner below explains it and how to connect a real instrument.
     demo_mode = false
     try
         sp_check = LibSerialPort.open(serial_port, BAUD_RATE)
         LibSerialPort.close(sp_check)
     catch
-        @warn "Serial port $serial_port not available - will use demo mode"
         demo_mode = true
     end
 
     app = AppState()
     tx_queue = Channel{Tuple{UInt16,Vector{UInt8}}}(32)
     shutdown = Ref(false)
+
+    # ── Choose a log-file prefix and open the first file *before* acquisition ──
+    # starts, so nothing is ever recorded before the user has named the output.
+    app.log_prefix = _prompt_log_prefix(demo_mode, serial_port)
+    csv_filename = newlogname(app)
+    app.csv_io = init_csv(csv_filename)
+    app.log_filename = csv_filename
 
     # ── Start link layer or demo runner ────────────────────────────────────────
     link_task = if demo_mode
@@ -181,20 +220,14 @@ function _run_live(serial_override::Union{Nothing,AbstractString}=nothing)
     if !any(e -> e.kind == EVT_CONNECT, app.events[])
         @error "No Akta connection after $(Int(timeout_s)) s — aborting"
         shutdown[] = true
+        close(app.csv_io)
+        rm(app.log_filename; force=true)   # discard the empty, unused log
         return
     end
 
-    # ── CSV filename prompt ────────────────────────────────────────────────────
-    tag = demo_mode ? "demo_" : ""
-    default_name = "akta_$(tag)$(Dates.format(Dates.now(), "yyyymmdd_HHMMSS")).csv"
-    sleep(0.5)
-    print("Log filename [$default_name]: ")
-    input = strip(readline())
-    csv_filename = isempty(input) ? default_name : input
-    app.csv_io = init_csv(csv_filename)
-    app.log_filename = csv_filename
-
     # ── Build and open the GUI ─────────────────────────────────────────────────
+    # activate!: ensure the interactive backend (not CairoMakie, used for PDF export)
+    GLMakie.activate!(; title="AktaPrime Acquisition")
     fig = build_gui(app)
     screen = display(fig)
     @info "GUI opened"
@@ -211,12 +244,90 @@ function _run_live(serial_override::Union{Nothing,AbstractString}=nothing)
     finally
         shutdown[] = true
         close(app.csv_io)
-        @info "CSV closed — $(length(app.trend_data[])) trend points logged"
         try
             wait(link_task)
         catch
         end
+        _report_output(app)
     end
+end
+
+# Print friendly startup help and read the log-file prefix from the console.
+function _prompt_log_prefix(demo_mode::Bool, serial_port::AbstractString)::String
+    default_prefix = demo_mode ? "akta_demo" : "akta"
+    bar = "─"^64
+    println()
+    println(bar)
+    println("  AktaPrime.jl — Akta PRIME logger")
+    println("  $GITHUB_URL")
+    println(bar)
+    println()
+
+    if demo_mode
+        println("  No instrument was found on the serial port:")
+        println("      $serial_port")
+        println()
+        println("  Starting in DEMO MODE with simulated data, so you can explore")
+        println("  the interface without an instrument connected.")
+        println()
+        println("  To use a real Akta PRIME instead:")
+        println()
+        println("    1. Connect the instrument to this computer's serial port,")
+        println("       directly or via a USB-to-serial adaptor, and switch it on.")
+        println()
+        println("    2. Restart the app, giving it the port name, for example:")
+        println()
+        println("           AktaPrime $serial_port")
+        println()
+        println("       The port name is remembered, so next time you can just")
+        println("       run  AktaPrime  on its own.")
+        println()
+    else
+        println("  Using serial port:")
+        println("      $serial_port")
+        println()
+        println("  The instrument will be contacted once you have chosen a prefix.")
+        println()
+    end
+
+    println(bar)
+    println()
+    println("  Data are saved as CSV files in the current folder:")
+    println()
+    println("      $(pwd())")
+    println()
+    println("  Each run is written to its own file, named:")
+    println()
+    println("      <prefix>_<date>_<time>.csv")
+    println()
+    println("  A fresh file is started automatically whenever a new run begins,")
+    println("  so successive runs never overwrite or overlap one another.")
+    println()
+    println("  The prefix is simply a label to help you find these files later,")
+    println("  such as a sample name or your initials.")
+    println()
+    println(bar)
+    println()
+    print("  Log-file prefix  (press ENTER for \"$default_prefix\"): ")
+    input = strip(readline())
+    return isempty(input) ? default_prefix : String(input)
+end
+
+# Tell the user where their data ended up when logging stops.
+function _report_output(app::AppState)
+    bar = "─"^64
+    println()
+    println(bar)
+    @info "Logging stopped — $(length(app.trend_data[])) trend points in the final run"
+    println()
+    println("  Data saved in:")
+    println("      $(pwd())")
+    println()
+    println("  Files this session are named:")
+    println("      $(app.log_prefix)_<date>_<time>.csv")
+    println()
+    println("  Most recent run: $(basename(app.log_filename))")
+    println(bar)
 end
 
 function main()
