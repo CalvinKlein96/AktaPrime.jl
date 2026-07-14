@@ -39,7 +39,8 @@ function _run_replay(filename::AbstractString)
     load_csv_log!(app, filename_str)
     app.log_filename = filename_str
 
-    GLMakie.activate!()   # ensure the interactive backend, not CairoMakie (used for PDF export)
+    # activate!: ensure the interactive backend (not CairoMakie, used for PDF export)
+    GLMakie.activate!(; title="AktaPrime Viewer")
     fig = build_gui(app; viewer=true)
     screen = display(fig)
     @info "GUI opened (replay)"
@@ -225,7 +226,8 @@ function _run_live(serial_override::Union{Nothing,AbstractString}=nothing)
     end
 
     # ── Build and open the GUI ─────────────────────────────────────────────────
-    GLMakie.activate!()   # ensure the interactive backend, not CairoMakie (used for PDF export)
+    # activate!: ensure the interactive backend (not CairoMakie, used for PDF export)
+    GLMakie.activate!(; title="AktaPrime Acquisition")
     fig = build_gui(app)
     screen = display(fig)
     @info "GUI opened"

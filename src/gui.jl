@@ -81,21 +81,25 @@ function build_gui(app::AppState; viewer::Bool=false)::Figure
     # Two independent sub-layouts: plots left, status+flow right.
     # Nesting gives each side its own row-size control.
     left = fig[1, 1] = GridLayout()
-    right = fig[1, 2] = GridLayout()
+    right = fig[1, 2] = GridLayout(; valign=:top)
     colsize!(fig.layout, 1, Relative(0.75))
     colsize!(fig.layout, 2, Relative(0.25))
+    # Force the single row to fill the figure height. Without this, in viewer
+    # mode (where the right column has no height-filling flow schematic) the row
+    # would shrink to the right column's content and squash the plots.
+    rowsize!(fig.layout, 1, Relative(1))
 
     x_mode_is_vol = Observable(false)
 
     # ── Chromatogram axes (UV always shown; the rest are toggleable) ───────────
-    ax_uv = Axis(left[1, 1]; ylabel="UV (AU)", ygridvisible=true, xgridvisible=false)
-    ax_pctb = Axis(left[2, 1]; ylabel="%B", ygridvisible=true, xgridvisible=false,
+    ax_uv = Axis(left[1, 1]; ylabel="UV (AU)", ygridvisible=false, xgridvisible=false)
+    ax_pctb = Axis(left[2, 1]; ylabel="%B", ygridvisible=false, xgridvisible=false,
         limits=(nothing, (-3, 103)))   # margin so the trace is visible at 0 %B and 100 %B
     ax_cond = Axis(left[3, 1]; ylabel="Conductivity (mS/cm)",
-        ygridvisible=true, xgridvisible=false)
-    ax_ph = Axis(left[4, 1]; ylabel="pH", ygridvisible=true, xgridvisible=false)
+        ygridvisible=false, xgridvisible=false)
+    ax_ph = Axis(left[4, 1]; ylabel="pH", ygridvisible=false, xgridvisible=false)
     ax_pres = Axis(left[5, 1]; ylabel="Pressure (MPa)",
-        ygridvisible=true, xgridvisible=false)
+        ygridvisible=false, xgridvisible=false)
 
     linkxaxes!(ax_uv, ax_pctb, ax_cond, ax_ph, ax_pres)
 
@@ -272,8 +276,8 @@ function build_gui(app::AppState; viewer::Bool=false)::Figure
     colgap!(toggle_grid, 6)
 
     # Zoom hint above the status read-out
-    Label(right[4, 1], "Drag to zoom · right-drag to pan · Ctrl-click to reset";
-        halign=:left, tellwidth=false, fontsize=11, color=:gray40)
+    Label(right[4, 1], "Drag to zoom · Right-drag to pan · Ctrl-click to reset";
+        halign=:center, valign=:center, tellwidth=false, fontsize=11, color=:gray40)
 
     # ── Status read-out — left-aligned text ────────────────────────────────────
     status_text = Observable("")
@@ -287,17 +291,17 @@ function build_gui(app::AppState; viewer::Bool=false)::Figure
         on(app.inst) do s
             inj = lowercase(_inject_label(s.inject_value))
             route = s.fraction_vol_mL > 0 ? "frac collector" : "waste"
-            t_s = @sprintf("%.1f", s.run_time_ms / 1000)
+            t_min = @sprintf("%.2f", s.run_time_ms / 60_000)
             v = @sprintf("%.4f", s.run_vol_mL)
             status_text[] = """
-State:  $(rpad(s.run_state, 10))
-Run t:  $t_s s
-Run v:  $v mL
-Valve:  $inj
+State: $(s.run_state)
+Run time: $t_min min
+Run volume: $v mL
+Valve: $inj
 Output: $route
-Frac #: $(s.fraction_number)
-Frac v: $(@sprintf("%.2f", s.fraction_vol_mL)) mL
-File:   $(basename(app.log_filename))"""
+Fraction #: $(s.fraction_number)
+Fraction volume: $(@sprintf("%.2f", s.fraction_vol_mL)) mL
+File: $(basename(app.log_filename))"""
         end
     end
 
@@ -316,27 +320,17 @@ File:   $(basename(app.log_filename))"""
     # Full-extent autoscale of the shared x-axis and the free (non-%B) y-axes.
     rescale!() = (autolimits!(ax_uv); ylims!(ax_cond); ylims!(ax_ph); ylims!(ax_pres))
 
-    # On switching time<->volume, remap the current x view into the new units so
-    # the same stretch of the run stays in frame rather than jumping.
+    # On switching time<->volume, relabel the x-axis and reset the limits to fit
+    # the data in the new units (equivalent to a zoom reset). Live updates and
+    # manual zooming continue to work normally afterwards.
     on(xmenu.selection) do sel
-        new_by_vol = sel == "Plot vs volume"
-        old_by_vol = x_mode_is_vol[]
-        xr = ax_uv.finallimits[]
-        xlo, xhi = xr.origin[1], xr.origin[1] + xr.widths[1]
-        trend = app.trend_data[]
-
-        x_mode_is_vol[] = new_by_vol
-        lbl = new_by_vol ? "Volume (mL)" : "Time (min)"
+        by_vol = sel == "Plot vs volume"
+        x_mode_is_vol[] = by_vol
+        lbl = by_vol ? "Volume (mL)" : "Time (min)"
         for ax in (ax_uv, ax_pctb, ax_cond, ax_ph, ax_pres)
             ax.xlabel = lbl
         end
-
-        if new_by_vol != old_by_vol && length(trend) > 1
-            xlims!(ax_uv, _map_x(trend, xlo, old_by_vol, new_by_vol),
-                _map_x(trend, xhi, old_by_vol, new_by_vol))
-        else
-            rescale!()
-        end
+        rescale!()
     end
 
     # Save the currently displayed plot (visible panels, current limits) to PDF.
@@ -358,7 +352,7 @@ File:   $(basename(app.log_filename))"""
         ax.ylabelvisible = vis
         ax.yticksvisible = vis
         ax.yticklabelsvisible = vis
-        ax.ygridvisible = vis
+        ax.ygridvisible = false   # no horizontal grid lines
         ax.xticksvisible = vis
         ax.leftspinevisible = vis
         ax.rightspinevisible = vis
@@ -411,20 +405,6 @@ _channel_value(p::TrendPoint, chan::Symbol)::Float64 =
     chan === :pctb ? p.pctb :
     chan === :cond ? p.cond_mScm :
     chan === :ph ? p.ph : p.pres_MPa
-
-# Map an x-coordinate from one unit (time/volume) to the other, using the trend
-# data as a monotonic lookup table with linear interpolation.
-function _map_x(trend::Vector{TrendPoint}, x::Real, from_vol::Bool, to_vol::Bool)
-    isempty(trend) && return Float64(x)
-    xs = [Float64(_trend_x(p, from_vol)) for p in trend]
-    ys = [Float64(_trend_x(p, to_vol)) for p in trend]
-    x <= xs[1] && return ys[1]
-    x >= xs[end] && return ys[end]
-    i = searchsortedlast(xs, x)
-    (i < 1 || i >= length(xs)) && return ys[clamp(i, 1, length(ys))]
-    frac = (x - xs[i]) / max(xs[i+1] - xs[i], eps())
-    ys[i] + frac * (ys[i+1] - ys[i])
-end
 
 # Shade fraction-collection spans (and optionally number them) on a static axis.
 function _draw_fraction_spans!(ax, fracs::Vector{Fraction}, trend::Vector{TrendPoint},
@@ -489,7 +469,7 @@ function _save_plot_pdf(app::AppState, axes, toggles, by_vol::Bool, counter::Ref
     for (i, (srcax, chan, ylab, col)) in enumerate(specs)
         bottom = i == length(specs)
         ax = Axis(expfig[i, 1]; ylabel=ylab, xlabel=(bottom ? xlab : ""),
-            xgridvisible=false, ygridvisible=true, xticklabelsvisible=bottom)
+            xgridvisible=false, ygridvisible=false, xticklabelsvisible=bottom)
         (chan === :uv || chan === :pctb) &&
             _draw_fraction_spans!(ax, fracs, trend, by_vol; labels=(chan === :pctb))
         if chan === :uv
