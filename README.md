@@ -1,13 +1,36 @@
 # AktaPrime.jl
 
-AktaPrime is a Julia app for logging and visualizing AKTA PRIME chromatography data.
+[![Documentation](https://img.shields.io/badge/docs-dev-blue.svg)](https://waudbylab.github.io/AktaPrime.jl/dev/)
+[![CI](https://github.com/waudbylab/AktaPrime.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/waudbylab/AktaPrime.jl/actions/workflows/CI.yml)
+[![Documentation build](https://github.com/waudbylab/AktaPrime.jl/actions/workflows/Documenter.yml/badge.svg)](https://github.com/waudbylab/AktaPrime.jl/actions/workflows/Documenter.yml)
+
+AktaPrime is a Julia app for logging and visualising GE/Cytiva **ÄKTA Prime plus**
+chromatography data — an open replacement for the discontinued PrimeView control
+software.
 
 ![AktaPrime screenshot](assets/screenshot.png)
+
+## Documentation
+
+Full user documentation — installation (including the serial cable and
+per-platform serial-port setup), running an acquisition, viewing and exporting
+results, and demo mode — is at:
+
+**➡ https://waudbylab.github.io/AktaPrime.jl/dev/**
+
+Quick links:
+
+- [Installation](https://waudbylab.github.io/AktaPrime.jl/dev/installation/)
+- [Acquisition](https://waudbylab.github.io/AktaPrime.jl/dev/acquisition/)
+- [Viewing results](https://waudbylab.github.io/AktaPrime.jl/dev/viewing/)
+- [Demo mode](https://waudbylab.github.io/AktaPrime.jl/dev/demo/)
 
 ## Requirements
 
 - Julia 1.12+
-- Access to this private repository
+- A serial (RS-232) connection to the instrument — see the
+  [installation docs](https://waudbylab.github.io/AktaPrime.jl/dev/installation/)
+  for the recommended FTDI cable
 - `~/.julia/bin` on your `PATH`
 
 On macOS/Linux:
@@ -16,21 +39,19 @@ On macOS/Linux:
 export PATH="$HOME/.julia/bin:$PATH"
 ```
 
-## Install As An App (private repo)
+## Install as an app
 
 In Julia package mode:
 
 ```julia
-pkg> app add https://github.com/waudbylab/AktaPrime.jl.git
+pkg> app add AktaPrime
 ```
 
-If your GitHub access is SSH-based:
+Or install directly from the repository:
 
 ```julia
-pkg> app add git@github.com:waudbylab/AktaPrime.jl.git
+pkg> app add https://github.com/waudbylab/AktaPrime.jl.git
 ```
-
-If prompted, authenticate with credentials that can read the private repository.
 
 ## Run
 
