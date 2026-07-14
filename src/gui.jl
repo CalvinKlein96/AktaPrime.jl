@@ -24,9 +24,9 @@ const EVT_COLORS = Dict(
 )
 
 _inject_label(v::InjectValue) =
-    v == IV_LOAD ? "LOAD" :
-    v == IV_INJECT ? "INJECT" :
-    v == IV_WASTE ? "WASTE" : "UNKNOWN"
+    v == IV_LOAD ? "load" :
+    v == IV_INJECT ? "inject" :
+    v == IV_WASTE ? "waste" : "unknown"
 
 function _event_label_top(e::AktaEvent)::String
     if e.kind == EVT_INJECT
@@ -120,10 +120,10 @@ function build_gui(app::AppState)::Figure
     pres_pts = @lift [Point2f(_trend_x(p, $x_mode_is_vol), p.pres_MPa) for p in $_trend]
 
     lines!(ax_uv, uv_pts, color=COL_UV, linewidth=1.5)
-    lines!(ax_pctb, pctb_pts, color=COL_PCTB, linewidth=1.5)
-    lines!(ax_cond, cond_pts, color=COL_COND, linewidth=1.5)
-    lines!(ax_ph, ph_pts, color=COL_PH, linewidth=1.5)
-    lines!(ax_pres, pres_pts, color=COL_PRES, linewidth=1.5)
+    pl_pctb = lines!(ax_pctb, pctb_pts, color=COL_PCTB, linewidth=1.5)
+    pl_cond = lines!(ax_cond, cond_pts, color=COL_COND, linewidth=1.5)
+    pl_ph = lines!(ax_ph, ph_pts, color=COL_PH, linewidth=1.5)
+    pl_pres = lines!(ax_pres, pres_pts, color=COL_PRES, linewidth=1.5)
 
     # ── Event vlines on UV panel ──────────────────────────────────────────────
     # xautolimits/yautolimits=false prevents Makie calling extrema on empty vectors.
@@ -249,12 +249,12 @@ function build_gui(app::AppState)::Figure
 
     # ── Right panel: title, controls, status, flow schematic ───────────────────
     Label(right[1, 1], "AktaPrime.jl (v0.1.0)";
-        halign=:center, fontsize=15, font=:bold, tellwidth=false)
+        halign=:center, fontsize=17, font=:bold, tellwidth=false)
 
     # X-axis plotting mode — self-describing menu, no label needed
     xmenu = Menu(right[2, 1];
         options=["Plot vs time", "Plot vs volume"],
-        default="Plot vs time", tellwidth=false)
+        default="Plot vs time", tellwidth=false, fontsize=13)
 
     on(xmenu.selection) do sel
         by_vol = sel == "Plot vs volume"
@@ -268,11 +268,11 @@ function build_gui(app::AppState)::Figure
     # Status read-out — left-aligned text
     status_text = Observable("")
     Label(right[3, 1], status_text;
-        halign=:left, justification=:left, tellwidth=false, fontsize=11)
+        halign=:left, justification=:left, tellwidth=false, fontsize=13)
 
     on(app.inst) do s
         inj = _inject_label(s.inject_value)
-        route = s.fraction_vol_mL > 0 ? "FRAC COLLECTOR" : "WASTE"
+        route = s.fraction_vol_mL > 0 ? "frac collector" : "waste"
         t_s = @sprintf("%.1f", s.run_time_ms / 1000)
         v = @sprintf("%.4f", s.run_vol_mL)
         status_text[] = """
@@ -283,20 +283,18 @@ Valve:  $inj
 Output: $route
 Frac #: $(s.fraction_number)
 Frac v: $(@sprintf("%.2f", s.fraction_vol_mL)) mL
-Prog:   $(isempty(s.prog_name) ? "---" : s.prog_name)
-Ver:    $(isempty(s.version)   ? "---" : s.version)
 File:   $(basename(app.log_filename))"""
     end
 
     # ── 2×2 chart-visibility toggles ───────────────────────────────────────────
     toggle_grid = right[4, 1] = GridLayout(; tellwidth=false, halign=:center)
-    Label(toggle_grid[1, 1], "%B"; halign=:right, fontsize=11)
+    Label(toggle_grid[1, 1], "%B"; halign=:right, fontsize=13)
     tg_pctb = Toggle(toggle_grid[1, 2], active=true)
-    Label(toggle_grid[1, 3], "Cond"; halign=:right, fontsize=11)
+    Label(toggle_grid[1, 3], "Cond"; halign=:right, fontsize=13)
     tg_cond = Toggle(toggle_grid[1, 4], active=true)
-    Label(toggle_grid[2, 1], "pH"; halign=:right, fontsize=11)
+    Label(toggle_grid[2, 1], "pH"; halign=:right, fontsize=13)
     tg_ph = Toggle(toggle_grid[2, 2], active=true)
-    Label(toggle_grid[2, 3], "Pressure"; halign=:right, fontsize=11)
+    Label(toggle_grid[2, 3], "Pressure"; halign=:right, fontsize=13)
     tg_pres = Toggle(toggle_grid[2, 4], active=true)
     colgap!(toggle_grid, 6)
 
@@ -311,30 +309,47 @@ File:   $(basename(app.log_filename))"""
 
     _draw_flow_schematic!(ax_flow, app)
 
-    # ── Panel show/hide: collapse hidden rows and keep tick labels + x label on
-    #    the lowest visible panel.  UV is always shown; toggles drive the rest. ─
-    toggles = ((ax_pctb, 2, tg_pctb), (ax_cond, 3, tg_cond),
-        (ax_ph, 4, tg_ph), (ax_pres, 5, tg_pres))
+    # ── Panel show/hide ─────────────────────────────────────────────────────────
+    # Hiding a panel collapses its row *and* turns off its line and every
+    # decoration, so no orphaned frame, ticks or labels are left behind.  UV is
+    # always shown; the toggles drive the other four.  The lowest visible panel
+    # carries the shared x tick labels and axis label.
+    panels = ((ax_pctb, pl_pctb, 2, tg_pctb), (ax_cond, pl_cond, 3, tg_cond),
+        (ax_ph, pl_ph, 4, tg_ph), (ax_pres, pl_pres, 5, tg_pres))
+
+    function showaxis!(ax, vis)
+        ax.ylabelvisible = vis
+        ax.yticksvisible = vis
+        ax.yticklabelsvisible = vis
+        ax.ygridvisible = vis
+        ax.xticksvisible = vis
+        ax.leftspinevisible = vis
+        ax.rightspinevisible = vis
+        ax.topspinevisible = vis
+        ax.bottomspinevisible = vis
+        # x tick labels and the x axis label are re-enabled only on the bottom
+        # visible panel, below.
+        ax.xticklabelsvisible = false
+        ax.xlabelvisible = false
+    end
 
     function refresh_panels!()
         visible = Axis[ax_uv]
+        showaxis!(ax_uv, true)
         rowsize!(left, 1, Auto())
-        for (ax, row, tg) in toggles
-            if tg.active[]
-                rowsize!(left, row, Auto())
-                push!(visible, ax)
-            else
-                rowsize!(left, row, Fixed(0))
-            end
+        for (ax, pl, row, tg) in panels
+            vis = tg.active[]
+            pl.visible[] = vis
+            showaxis!(ax, vis)
+            rowsize!(left, row, vis ? Auto() : Fixed(0))
+            vis && push!(visible, ax)
         end
-        for (i, ax) in enumerate(visible)
-            bottom = i == length(visible)
-            ax.xticklabelsvisible = bottom
-            ax.xlabelvisible = bottom
-        end
+        bottom = visible[end]
+        bottom.xticklabelsvisible = true
+        bottom.xlabelvisible = true
     end
 
-    for (_, _, tg) in toggles
+    for (_, _, _, tg) in panels
         on(_ -> refresh_panels!(), tg.active)
     end
     refresh_panels!()
@@ -410,19 +425,20 @@ function _draw_flow_schematic!(ax, app::AppState)
     ln_out_frac = lines!(ax, [x_c, x_frac], [y_out, y_bottom]; color=:forestgreen, linewidth=2.4, visible=false)
 
     # ── Static symbols ───────────────────────────────────────────────────────
-    box!(ax, x_l, y_buf, 1.30, 0.62, "Buffer A"; color=(COL_BUF_A, 0.78), fontsize=8)
-    box!(ax, x_frac, y_buf, 1.30, 0.62, "Buffer B"; color=(COL_BUF_B, 0.78), fontsize=8)
-    box!(ax, x_c, y_mix, 1.30, 0.72, "MIX"; color=(:khaki1, 0.94), fontsize=8)
+    # The mixer box itself is drawn below as a live %B-coloured poly, so it is
+    # deliberately omitted here to avoid a doubled label.
+    box!(ax, x_l, y_buf, 1.30, 0.62, "Buffer A"; color=(COL_BUF_A, 0.78), fontsize=10)
+    box!(ax, x_frac, y_buf, 1.30, 0.62, "Buffer B"; color=(COL_BUF_B, 0.78), fontsize=10)
     inj_poly = diamond!(ax, x_c, y_inj, 1.55, 0.92; color=(:lightgray, 0.94))
-    box!(ax, x_c, y_col, 1.35, 0.74, "COLUMN"; color=(:wheat, 0.93), fontsize=8)
-    box!(ax, x_c, y_uv, 1.48, 0.78, "UV / COND"; color=(:lightyellow, 0.93), fontsize=8)
+    box!(ax, x_c, y_col, 1.35, 0.74, "COLUMN"; color=(:wheat, 0.93), fontsize=10)
+    box!(ax, x_c, y_uv, 1.48, 0.78, "UV / COND"; color=(:lightyellow, 0.93), fontsize=10)
     out_poly = diamond!(ax, x_c, y_out, 1.30, 0.84; color=(:azure2, 0.93))
-    box!(ax, x_r, y_syr, 1.45, 0.62, "SYRINGE"; color=(:mistyrose2, 0.88), fontsize=8)
-    box!(ax, x_r, y_loop, 1.20, 0.62, "LOOP"; color=(:gray95, 0.93), fontsize=8)
-    box!(ax, x_frac, y_bottom, 1.25, 0.68, "FRAC"; color=(:lightgreen, 0.90), fontsize=8)
-    box!(ax, x_l, y_bottom, 1.30, 0.62, "WASTE"; color=(:gray92, 0.95), fontsize=8)
-    box!(ax, x_r, y_waste_loop, 1.30, 0.62, "WASTE"; color=(:gray92, 0.95), fontsize=8)
-    box!(ax, x_l, y_waste_inj, 1.30, 0.62, "WASTE"; color=(:gray92, 0.95), fontsize=8)
+    box!(ax, x_r, y_syr, 1.45, 0.62, "SYRINGE"; color=(:mistyrose2, 0.88), fontsize=10)
+    box!(ax, x_r, y_loop, 1.20, 0.62, "LOOP"; color=(:gray95, 0.93), fontsize=10)
+    box!(ax, x_frac, y_bottom, 1.25, 0.68, "FRAC"; color=(:lightgreen, 0.90), fontsize=10)
+    box!(ax, x_l, y_bottom, 1.30, 0.62, "WASTE"; color=(:gray92, 0.95), fontsize=10)
+    box!(ax, x_r, y_waste_loop, 1.30, 0.62, "WASTE"; color=(:gray92, 0.95), fontsize=10)
+    box!(ax, x_l, y_waste_inj, 1.30, 0.62, "WASTE"; color=(:gray92, 0.95), fontsize=10)
 
     # ── MIXER — colour blends BufA→BufB by %B ────────────────────────────────
     mixer_color = @lift begin
@@ -438,14 +454,14 @@ function _draw_flow_schematic!(ax, app::AppState)
         td = $(app.trend_data)
         isempty(td) ? "MIX" : @sprintf("%.0f%%B", td[end].pctb)
     end
-    text!(ax, x_c, y_mix; text=mixer_label, fontsize=8,
+    text!(ax, x_c, y_mix; text=mixer_label, fontsize=10,
         align=(:center, :center), font=:bold)
 
-    inj_txt = text!(ax, x_c, y_inj; text="LOAD", fontsize=8,
+    inj_txt = text!(ax, x_c, y_inj; text="load", fontsize=10,
         align=(:center, :center), font=:bold, color=:black)
-    text!(ax, x_c, y_out; text="OUT", fontsize=8,
+    text!(ax, x_c, y_out; text="OUT", fontsize=10,
         align=(:center, :center), font=:bold, color=:black)
-    out_txt = text!(ax, x_c, y_out - 0.95; text="TO WASTE", fontsize=8,
+    out_txt = text!(ax, x_c, y_out - 0.95; text="to waste", fontsize=10,
         align=(:center, :center), font=:bold, color=:gray35)
 
     on(app.inst) do s
@@ -482,8 +498,8 @@ function _draw_flow_schematic!(ax, app::AppState)
         out_poly.color[] = out_to_frac ? (:lightgreen, 0.93) : (:gray70, 0.93)
 
         inj_txt.text[] = _inject_label(s.inject_value)
-        out_txt.text[] = is_unk ? "PATH UNKNOWN" :
-                         (out_to_frac ? "TO FRAC #$(s.fraction_number)" : "TO WASTE")
+        out_txt.text[] = is_unk ? "path unknown" :
+                         (out_to_frac ? "to frac #$(s.fraction_number)" : "to waste")
     end
 
     # ── Run-state banner ──────────────────────────────────────────────────────
@@ -496,6 +512,6 @@ function _draw_flow_schematic!(ax, app::AppState)
         s == "Continue" ? (:blue, 1.0) :
         s == "End" ? (:red, 1.0) : (:gray, 1.0)
     end
-    text!(ax, 1.6, 10.6; text=state_text, fontsize=12, font=:bold,
+    text!(ax, 1.6, 10.6; text=state_text, fontsize=14, font=:bold,
         align=(:center, :center), color=state_color)
 end

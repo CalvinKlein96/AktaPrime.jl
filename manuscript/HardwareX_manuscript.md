@@ -508,8 +508,10 @@ julia --project=. -m AktaPrime run_log.csv           # replay a log
 3. The client polls for the instrument and, on connecting, records a connect
    event. If no instrument is reachable within the timeout, it drops into
    demonstration mode automatically so the interface can still be explored.
-4. When prompted, accept the default timestamped log-file name or type your
-   own. Logging begins immediately and the display window opens.
+4. When prompted, enter a short log-file **prefix** (or accept the default).
+   The prompt explains that each run is written to its own timestamped file,
+   `<prefix>_<date>_<time>.csv`, in the current folder, and shows that folder's
+   path. Logging begins and the display window opens.
 
 ### 6.2 During a run
 

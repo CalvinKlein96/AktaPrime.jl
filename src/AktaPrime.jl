@@ -55,10 +55,28 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # run_demo — simulated Akta data stream for testing without hardware
 # ─────────────────────────────────────────────────────────────────────────────
+const DEMO_FRACTIONS_PER_RUN = 20
+
 function run_demo(shutdown::Ref{Bool}, app::AppState)
     push_event!(app, EVT_CONNECT, "Demo mode — simulated Akta")
+
+    # Repeat runs indefinitely. Each run ends after DEMO_FRACTIONS_PER_RUN
+    # fractions; the next one rolls over to a fresh log file (via rolllog!),
+    # exercising the automatic per-run restart of logging.
+    run_index = 0
+    while !shutdown[]
+        run_index += 1
+        run_index > 1 && rolllog!(app)   # counter restarts → new file, cleared display
+        _run_demo_run(shutdown, app)
+    end
+end
+
+# One simulated chromatographic run: streams until shutdown or until
+# DEMO_FRACTIONS_PER_RUN fractions have been collected, then ends the run.
+function _run_demo_run(shutdown::Ref{Bool}, app::AppState)
     app.inst[].run_state = "Run"
     notify(app.inst)
+    push_event!(app, EVT_RUN_STATE, "Run state: Run  inject=IV_LOAD")
 
     # 2 s of simulated time per step, 0.2 s sleep → 10× real-time speedup.
     # Flow rate varies between 0.5–2.0 mL/min so time and volume axes diverge visibly.
@@ -128,6 +146,15 @@ function run_demo(shutdown::Ref{Bool}, app::AppState)
             end
             notify(app.inst)
             push_event!(app, EVT_TUBEFEED, "Feed Tube Nr $(app.inst[].fraction_number)")
+
+            # End this run once enough fractions have been collected.
+            if app.inst[].fraction_number >= DEMO_FRACTIONS_PER_RUN
+                app.inst[].run_state = "End"
+                notify(app.inst)
+                push_event!(app, EVT_RUN_STATE, "Run state: End  inject=IV_LOAD")
+                sleep(1.0)   # brief pause so the ended run is visible before restart
+                return
+            end
         end
     end
 end
@@ -156,6 +183,13 @@ function _run_live(serial_override::Union{Nothing,AbstractString}=nothing)
     tx_queue = Channel{Tuple{UInt16,Vector{UInt8}}}(32)
     shutdown = Ref(false)
 
+    # ── Choose a log-file prefix and open the first file *before* acquisition ──
+    # starts, so nothing is ever recorded before the user has named the output.
+    app.log_prefix = _prompt_log_prefix(demo_mode)
+    csv_filename = newlogname(app)
+    app.csv_io = init_csv(csv_filename)
+    app.log_filename = csv_filename
+
     # ── Start link layer or demo runner ────────────────────────────────────────
     link_task = if demo_mode
         @info "Starting demo mode"
@@ -182,20 +216,10 @@ function _run_live(serial_override::Union{Nothing,AbstractString}=nothing)
     if !any(e -> e.kind == EVT_CONNECT, app.events[])
         @error "No Akta connection after $(Int(timeout_s)) s — aborting"
         shutdown[] = true
+        close(app.csv_io)
+        rm(app.log_filename; force=true)   # discard the empty, unused log
         return
     end
-
-    # ── CSV log-prefix prompt ──────────────────────────────────────────────────
-    # A new run automatically rolls over to a fresh "<prefix>_<timestamp>.csv",
-    # so we collect a base name here rather than a single fixed filename.
-    default_prefix = demo_mode ? "akta_demo" : "akta"
-    sleep(0.5)
-    print("Log file prefix [$default_prefix]: ")
-    input = strip(readline())
-    app.log_prefix = isempty(input) ? default_prefix : String(input)
-    csv_filename = newlogname(app)
-    app.csv_io = init_csv(csv_filename)
-    app.log_filename = csv_filename
 
     # ── Build and open the GUI ─────────────────────────────────────────────────
     fig = build_gui(app)
@@ -214,12 +238,47 @@ function _run_live(serial_override::Union{Nothing,AbstractString}=nothing)
     finally
         shutdown[] = true
         close(app.csv_io)
-        @info "CSV closed — $(length(app.trend_data[])) trend points logged"
         try
             wait(link_task)
         catch
         end
+        _report_output(app)
     end
+end
+
+# Print friendly startup help and read the log-file prefix from the console.
+function _prompt_log_prefix(demo_mode::Bool)::String
+    default_prefix = demo_mode ? "akta_demo" : "akta"
+    bar = "─"^62
+    println()
+    println(bar)
+    println("  Akta PRIME logger" * (demo_mode ? "  (demo mode — no instrument found)" : ""))
+    println(bar)
+    println("  Data are logged as CSV files in the current folder:")
+    println("      $(pwd())")
+    println()
+    println("  Each run is saved to its own file, named:")
+    println("      <prefix>_<date>_<time>.csv")
+    println("  A fresh file is started automatically whenever a new run begins,")
+    println("  so successive runs never overwrite or overlap one another.")
+    println()
+    println("  The prefix is just a label to help you find these files later —")
+    println("  e.g. a sample name or your initials.")
+    print("  Log-file prefix [$default_prefix]: ")
+    input = strip(readline())
+    return isempty(input) ? default_prefix : String(input)
+end
+
+# Tell the user where their data ended up when logging stops.
+function _report_output(app::AppState)
+    bar = "─"^62
+    println()
+    println(bar)
+    @info "Logging stopped — $(length(app.trend_data[])) trend points in the final run"
+    println("  Data saved in:   $(pwd())")
+    println("  Files this session are named:  $(app.log_prefix)_<date>_<time>.csv")
+    println("  Most recent run: $(basename(app.log_filename))")
+    println(bar)
 end
 
 function main()
