@@ -1,5 +1,6 @@
 # AktaPrime.jl
 
+[![Documentation](https://img.shields.io/badge/docs-stable-blue.svg)](https://waudbylab.org/AktaPrime.jl/stable/)
 [![Documentation](https://img.shields.io/badge/docs-dev-blue.svg)](https://waudbylab.org/AktaPrime.jl/dev/)
 [![CI](https://github.com/waudbylab/AktaPrime.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/waudbylab/AktaPrime.jl/actions/workflows/CI.yml)
 [![Documentation build](https://github.com/waudbylab/AktaPrime.jl/actions/workflows/Documenter.yml/badge.svg)](https://github.com/waudbylab/AktaPrime.jl/actions/workflows/Documenter.yml)
