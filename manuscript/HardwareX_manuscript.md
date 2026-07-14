@@ -177,11 +177,16 @@ The graphical interface (Figure 1) is built with GLMakie and is organised as
 four vertically stacked, x-axis-linked chromatogram panels on the left and a
 status-and-schematic column on the right.
 
-- The four panels show **UV absorbance (AU)**, **gradient %B**, **conductivity
-  (mS/cm)** and **pressure**, sharing a common x-axis.
-- A single toggle switches the shared x-axis between **elapsed time (minutes)**
-  and **cumulative volume (mL)**, the two natural abscissae for a
-  chromatogram.
+- The panels show **UV absorbance (AU)**, **gradient %B**, **conductivity
+  (mS/cm)**, **pH** and **pressure (MPa)**, sharing a common x-axis. UV is
+  always shown; the other four panels can be shown or hidden individually from
+  a set of toggles, so the display can be pared down to the channels of
+  interest.
+- A menu switches the shared x-axis between **elapsed time (minutes)** and
+  **cumulative volume (mL)**, the two natural abscissae for a chromatogram.
+- Each time a new run begins, the client automatically starts a fresh log file
+  and clears the display, so successive runs do not overlay one another when
+  the acquisition window is left open across runs.
 - Instrument **events** — connect/disconnect, run-state changes, injection-
   valve movements, method steps and free-text log messages from the
   instrument — are drawn as labelled vertical markers on the UV panel.
@@ -215,7 +220,7 @@ start timestamp, then rows with the columns:
 
 ```
 wall_time, cum_time_ms, cum_vol_mL, type,
-uv_AU, cond_mScm, ph_raw, pctb_pct, pres, temp_degC, message
+uv_AU, cond_mScm, ph, pctb_pct, pres_MPa, temp_degC, message
 ```
 
 Trend rows carry the six sensor channels against cumulative run time and
@@ -398,13 +403,17 @@ a physical instrument during testing recorded in the repository as **May 2025**
 - the full `0x1001/0x00 → 0x8001 → 0x8002 → 0x1001/0x01` handshake, and
   immediate trend streaming thereafter, were confirmed end-to-end.
 
-The repository is candid about what remains **unconfirmed**, and the manuscript
-should be too: the pH scale factor is unverified (the test system had no pH
-electrode), and the physical unit of the pressure channel (MPa versus bar) is
-recorded as "to be confirmed". These are carried through into the client's data
-types as explicit "unit TBD" annotations rather than being silently assumed.
-⟦If any of these have since been pinned down on the authors' instrument, update
-this paragraph accordingly.⟧
+Two channels warrant an explicit note on confidence. The pressure channel is
+in **MPa** (raw ÷ 1000); the client decodes, plots and logs it as such. The pH
+channel is decoded with the documented scaling (raw ÷ 100) to a dimensionless
+pH and is now captured and displayed on its own panel, but that scaling has not
+yet been checked against a reference buffer on an electrode-equipped
+instrument, so it should be treated as provisional until confirmed. Because the
+serial channel table always carries a pH field whether or not an electrode is
+fitted, presence of a genuine pH signal is a property of the instrument
+configuration rather than of the protocol. ⟦If the pH scaling has since been
+confirmed against known buffers on the authors' instrument, update this
+paragraph accordingly.⟧
 
 ---
 

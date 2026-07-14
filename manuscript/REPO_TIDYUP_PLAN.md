@@ -79,13 +79,16 @@ your review.
    Weigh this against the risk of churn in working, hardware-validated code —
    it is safe to leave as-is.
 
-9. **Resolve or clearly annotate the remaining protocol unknowns in code.**
-   The pH scale and the pressure unit are recorded as "TBD" in `types.jl`
-   comments and in the decompilation reference. If your instrument can pin
-   these down (a pH electrode; a known pressure reference), doing so and
-   updating both the code comments and the manuscript's Section 3.5 would close
-   the last open items. Otherwise, leaving the explicit "TBD" annotations is
-   the honest choice and matches the manuscript.
+9. **Confirm the pH scaling on hardware.** Pressure is now decoded, plotted and
+   logged as MPa, and pH is decoded (raw ÷ 100), logged and shown on its own
+   toggleable panel. The pH scaling is documented but has not been checked
+   against a reference buffer on an electrode-equipped instrument — verifying it
+   against known buffers (e.g. pH 4 / 7 / 10) would close the last open protocol
+   item and confirm the manuscript's §3.5. The decompilation reference
+   (`assets/akta_decompilation_reference.md`) still lists pH scale as "unknown";
+   update it once confirmed. A future, more robust option is to detect pH-monitor
+   presence from the instrument's hardware-detection response (OPC `0x514`)
+   rather than always decoding the channel.
 
 10. **Minor consistency.** `README.md` example commands reference
     `/dev/tty.usbserial-110`, which is also the hard-coded `DEFAULT_SERIAL_PORT`

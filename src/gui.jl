@@ -5,6 +5,7 @@ const COL_UV = RGBf(0.15, 0.35, 0.70)
 const COL_COND = RGBf(0.80, 0.20, 0.10)
 const COL_PCTB = RGBf(0.10, 0.55, 0.25)
 const COL_PRES = RGBf(0.75, 0.45, 0.00)
+const COL_PH = RGBf(0.55, 0.25, 0.65)
 
 const COL_BUF_A = RGBf(0.80, 0.10, 0.10)   # red
 const COL_BUF_B = RGBf(0.90, 0.80, 0.05)   # yellow
@@ -84,39 +85,44 @@ function build_gui(app::AppState)::Figure
     colsize!(fig.layout, 1, Relative(0.75))
     colsize!(fig.layout, 2, Relative(0.25))
 
-    # ── Chromatogram axes ─────────────────────────────────────────────────────
-    ax_uv = Axis(left[1, 1]; ylabel="UV (AU)", xticklabelsvisible=false,
-        ygridvisible=true, xgridvisible=false)
-    ax_pctb = Axis(left[2, 1]; ylabel="%B", xticklabelsvisible=false,
-        ygridvisible=true, xgridvisible=false,
+    x_mode_is_vol = Observable(false)
+
+    # ── Chromatogram axes (UV always shown; the rest are toggleable) ───────────
+    ax_uv = Axis(left[1, 1]; ylabel="UV (AU)", ygridvisible=true, xgridvisible=false)
+    ax_pctb = Axis(left[2, 1]; ylabel="%B", ygridvisible=true, xgridvisible=false,
         limits=(nothing, (0, 105)))
-    ax_cond = Axis(left[3, 1]; ylabel="Conductivity (mS/cm)", xticklabelsvisible=false,
+    ax_cond = Axis(left[3, 1]; ylabel="Conductivity (mS/cm)",
         ygridvisible=true, xgridvisible=false)
-    ax_pres = Axis(left[4, 1]; ylabel="Pressure", xlabel="Time (min)",
+    ax_ph = Axis(left[4, 1]; ylabel="pH", ygridvisible=true, xgridvisible=false)
+    ax_pres = Axis(left[5, 1]; ylabel="Pressure (MPa)",
         ygridvisible=true, xgridvisible=false)
 
-    linkxaxes!(ax_uv, ax_cond, ax_pctb, ax_pres)
+    linkxaxes!(ax_uv, ax_pctb, ax_cond, ax_ph, ax_pres)
 
-    # for row in 1:4
-    #     rowsize!(left, row, Relative(0.22))
-    # end
-    # rowgap!(left, 4)
+    # x label tracks the plotting mode; per-panel visibility is set by
+    # refresh_panels! below so only the lowest visible panel carries it.
+    for ax in (ax_uv, ax_pctb, ax_cond, ax_ph, ax_pres)
+        ax.xlabel = "Time (min)"
+        ax.xticklabelsvisible = false
+        ax.xlabelvisible = false
+    end
 
     # ── Data observables ──────────────────────────────────────────────────────
     # Guard: provide a dummy point when empty so GLMakie axis autoscaling
     # never reduces over an empty collection on first render.
     _trend = @lift let d = $(app.trend_data)
-        isempty(d) ? [TrendPoint(0.0, 0.0, 0.0, 0.0, Int32(0), 0.0, 0.0, 0.0)] : d
+        isempty(d) ? [TrendPoint(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)] : d
     end
-    x_mode_is_vol = Observable(false)
     uv_pts = @lift [Point2f(_trend_x(p, $x_mode_is_vol), p.uv) for p in $_trend]
     cond_pts = @lift [Point2f(_trend_x(p, $x_mode_is_vol), p.cond_mScm) for p in $_trend]
+    ph_pts = @lift [Point2f(_trend_x(p, $x_mode_is_vol), p.ph) for p in $_trend]
     pctb_pts = @lift [Point2f(_trend_x(p, $x_mode_is_vol), p.pctb) for p in $_trend]
-    pres_pts = @lift [Point2f(_trend_x(p, $x_mode_is_vol), p.pres) for p in $_trend]
+    pres_pts = @lift [Point2f(_trend_x(p, $x_mode_is_vol), p.pres_MPa) for p in $_trend]
 
     lines!(ax_uv, uv_pts, color=COL_UV, linewidth=1.5)
-    lines!(ax_cond, cond_pts, color=COL_COND, linewidth=1.5)
     lines!(ax_pctb, pctb_pts, color=COL_PCTB, linewidth=1.5)
+    lines!(ax_cond, cond_pts, color=COL_COND, linewidth=1.5)
+    lines!(ax_ph, ph_pts, color=COL_PH, linewidth=1.5)
     lines!(ax_pres, pres_pts, color=COL_PRES, linewidth=1.5)
 
     # ── Event vlines on UV panel ──────────────────────────────────────────────
@@ -241,18 +247,28 @@ function build_gui(app::AppState)::Figure
     #     orientation=:horizontal, framevisible=false, tellwidth=false,
     #     labelsize=11, patchsize=(18, 2))
 
-    # ── Status panel + x-axis mode controls ─────────────────────────────────
-    top_right = right[1, 1] = GridLayout()
+    # ── Right panel: title, controls, status, flow schematic ───────────────────
+    Label(right[1, 1], "AktaPrime.jl (v0.1.0)";
+        halign=:center, fontsize=15, font=:bold, tellwidth=false)
 
-    Label(top_right[1, 1], "AktaPrime.jl (v0.1.0)";
-        halign=:center, fontsize=15, font=:bold,
-        tellwidth=false, padding=(8, 8, 6, 2))
+    # X-axis plotting mode — self-describing menu, no label needed
+    xmenu = Menu(right[2, 1];
+        options=["Plot vs time", "Plot vs volume"],
+        default="Plot vs time", tellwidth=false)
 
+    on(xmenu.selection) do sel
+        by_vol = sel == "Plot vs volume"
+        x_mode_is_vol[] = by_vol
+        lbl = by_vol ? "Volume (mL)" : "Time (min)"
+        for ax in (ax_uv, ax_pctb, ax_cond, ax_ph, ax_pres)
+            ax.xlabel = lbl
+        end
+    end
+
+    # Status read-out — left-aligned text
     status_text = Observable("")
-    Label(top_right[2, 1], status_text;
-        halign=:left, valign=:top,
-        tellwidth=false, tellheight=false,
-        fontsize=11, padding=(8, 8, 0, 0))
+    Label(right[3, 1], status_text;
+        halign=:left, justification=:left, tellwidth=false, fontsize=11)
 
     on(app.inst) do s
         inj = _inject_label(s.inject_value)
@@ -272,48 +288,65 @@ Ver:    $(isempty(s.version)   ? "---" : s.version)
 File:   $(basename(app.log_filename))"""
     end
 
-    rowsize!(right, 1, Fixed(210))
+    # ── 2×2 chart-visibility toggles ───────────────────────────────────────────
+    toggle_grid = right[4, 1] = GridLayout(; tellwidth=false, halign=:center)
+    Label(toggle_grid[1, 1], "%B"; halign=:right, fontsize=11)
+    tg_pctb = Toggle(toggle_grid[1, 2], active=true)
+    Label(toggle_grid[1, 3], "Cond"; halign=:right, fontsize=11)
+    tg_cond = Toggle(toggle_grid[1, 4], active=true)
+    Label(toggle_grid[2, 1], "pH"; halign=:right, fontsize=11)
+    tg_ph = Toggle(toggle_grid[2, 2], active=true)
+    Label(toggle_grid[2, 3], "Pressure"; halign=:right, fontsize=11)
+    tg_pres = Toggle(toggle_grid[2, 4], active=true)
+    colgap!(toggle_grid, 6)
 
-    # ── X-axis mode toggle (time vs volume) ─────────────────────────────────
-    mode_grid = top_right[3, 1] = GridLayout()
-    Label(mode_grid[1, 1], "X axis units"; halign=:right, fontsize=11)#, padding=(8, 0, 0, 0))
-    mode_toggle = Toggle(mode_grid[1, 2], active=false)
-    mode_label = @lift $(mode_toggle.active) ? "Volume (mL)" : "Time (min)"
-    Label(mode_grid[1, 3], mode_label; halign=:left, fontsize=11)
-    colsize!(mode_grid, 3, Relative(0.72))
-    colsize!(mode_grid, 1, Relative(0.28))
-    colsize!(mode_grid, 2, Fixed(34))
-
-    on(mode_toggle.active) do by_vol
-        x_mode_is_vol[] = by_vol
-        ax_pres.xlabel[] = by_vol ? "Volume (mL)" : "Time (min)"
-    end
-
-    # ── Flow path schematic (expanded to rows 2:4) ──────────────────────────
-    ax_flow = Axis(right[2:4, 1];
-        # title="Flow Path",
-        # titlesize=12, aspect=nothing,
+    # ── Flow path schematic ────────────────────────────────────────────────────
+    ax_flow = Axis(right[5, 1];
         xgridvisible=false, ygridvisible=false,
         xticksvisible=false, yticksvisible=false,
         xticklabelsvisible=false, yticklabelsvisible=false,
         leftspinevisible=false, rightspinevisible=false,
         topspinevisible=false, bottomspinevisible=false,
-        limits=(0, 10, 0, 12))
+        limits=(0.3, 8.1, 1.3, 12.0))
 
     _draw_flow_schematic!(ax_flow, app)
+
+    # ── Panel show/hide: collapse hidden rows and keep tick labels + x label on
+    #    the lowest visible panel.  UV is always shown; toggles drive the rest. ─
+    toggles = ((ax_pctb, 2, tg_pctb), (ax_cond, 3, tg_cond),
+        (ax_ph, 4, tg_ph), (ax_pres, 5, tg_pres))
+
+    function refresh_panels!()
+        visible = Axis[ax_uv]
+        rowsize!(left, 1, Auto())
+        for (ax, row, tg) in toggles
+            if tg.active[]
+                rowsize!(left, row, Auto())
+                push!(visible, ax)
+            else
+                rowsize!(left, row, Fixed(0))
+            end
+        end
+        for (i, ax) in enumerate(visible)
+            bottom = i == length(visible)
+            ax.xticklabelsvisible = bottom
+            ax.xlabelvisible = bottom
+        end
+    end
+
+    for (_, _, tg) in toggles
+        on(_ -> refresh_panels!(), tg.active)
+    end
+    refresh_panels!()
 
     # Populate all on(app.inst) callbacks (status text + flow schematic) now
     # that every listener has been registered.
     notify(app.inst)
 
-    # ── Zoom/pan tracking and auto-limit policy ───────────────────────────────
-    # app.iszoomed[] = false
-
-    # axes = (ax_uv, ax_cond, ax_pctb, ax_pres)
-
     on(app.trend_data) do _
         autolimits!(ax_uv)
         ylims!(ax_cond)
+        ylims!(ax_ph)
         ylims!(ax_pres)
     end
 

@@ -79,6 +79,7 @@ function run_demo(shutdown::Ref{Bool}, app::AppState)
         uv = 0.02 + 1.2 * exp(-((t_min - 4.0)^2) / (2 * 0.4^2)) +
              0.5 * exp(-((t_min - 6.5)^2) / (2 * 0.2^2))
         cond = 10.0 + 2.0 * sin(t_min * 0.5)
+        ph = 7.0 + 0.4 * sin(t_min * 0.3)
         pctb = clamp(t_min < 3.0 ? 5.0 : 5.0 + 30.0 * (t_min - 3.0), 5.0, 100.0)
         pres = 0.40 + 0.02 * sin(t_min * 2.0)
 
@@ -87,7 +88,7 @@ function run_demo(shutdown::Ref{Bool}, app::AppState)
         s.cum_time_ms = t_ms
         s.cum_vol_mL = v_mL
 
-        pt = TrendPoint(t_ms, v_mL, uv, cond, Int32(512), pctb, pres, 22.0)
+        pt = TrendPoint(t_ms, v_mL, uv, cond, ph, pctb, pres, 22.0)
         push!(app.trend_data[], pt)
         notify(app.trend_data)
         write_csv_trend(app, pt)
@@ -184,13 +185,15 @@ function _run_live(serial_override::Union{Nothing,AbstractString}=nothing)
         return
     end
 
-    # ── CSV filename prompt ────────────────────────────────────────────────────
-    tag = demo_mode ? "demo_" : ""
-    default_name = "akta_$(tag)$(Dates.format(Dates.now(), "yyyymmdd_HHMMSS")).csv"
+    # ── CSV log-prefix prompt ──────────────────────────────────────────────────
+    # A new run automatically rolls over to a fresh "<prefix>_<timestamp>.csv",
+    # so we collect a base name here rather than a single fixed filename.
+    default_prefix = demo_mode ? "akta_demo" : "akta"
     sleep(0.5)
-    print("Log filename [$default_name]: ")
+    print("Log file prefix [$default_prefix]: ")
     input = strip(readline())
-    csv_filename = isempty(input) ? default_name : input
+    app.log_prefix = isempty(input) ? default_prefix : String(input)
+    csv_filename = newlogname(app)
     app.csv_io = init_csv(csv_filename)
     app.log_filename = csv_filename
 
