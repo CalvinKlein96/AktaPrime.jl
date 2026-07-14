@@ -10,6 +10,12 @@ This is useful for:
 - teaching and demonstrations;
 - producing example figures.
 
+![AktaPrime.jl running in demo mode](assets/screenshot.png)
+
+*Demo mode: a simulated run, with the gradient (%B), two UV peaks, changing
+valve positions, and numbered fraction-collection spans — everything works
+exactly as it does with a real instrument.*
+
 ## Starting demo mode
 
 Just run the app on a computer with no instrument connected:

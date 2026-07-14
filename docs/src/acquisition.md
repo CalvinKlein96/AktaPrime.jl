@@ -3,11 +3,23 @@
 ## Starting the software
 
 Data are written to **the folder you start the app from**, so first open a
-terminal and change to wherever you want your files to go:
+terminal and change to wherever you want your files to go.
+
+**On Windows** (Command Prompt) — use a drive letter and backslashes, switching
+drive first if needed:
+
+```bat
+D:
+cd D:\akta_runs
+```
+
+**On macOS/Linux:**
 
 ```bash
 cd ~/akta_runs        # or wherever you keep your data
 ```
+
+See [Opening a terminal](@ref) if you are not sure how to get a command prompt.
 
 Then start the app. If you have already set your serial port (see
 [Installation](@ref)), just run:

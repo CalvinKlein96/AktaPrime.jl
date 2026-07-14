@@ -62,6 +62,11 @@ row per sample or event:
 wall_time,cum_time_ms,cum_vol_mL,type,uv_AU,cond_mScm,ph,pctb_pct,pres_MPa,temp_degC,message
 ```
 
+![A log file opened in a spreadsheet](assets/logfile-excel.png)
+
+*A log file opened in a spreadsheet: `TREND` rows carry the sensor values, while
+event rows (`EVT_CONNECT`, `EVT_INJECT`, `EVT_LOG`, …) carry a message.*
+
 | Column | Meaning |
 |---|---|
 | `wall_time` | Clock time the row was written |

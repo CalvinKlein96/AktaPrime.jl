@@ -5,28 +5,42 @@
 You need three things:
 
 1. A working **ÄKTA Prime plus** instrument.
-2. A **computer** running Windows, macOS or Linux.
-3. A **serial cable** to connect the two.
+2. A **computer** — any reasonably modern Windows, macOS or Linux machine.
+3. A **USB-to-serial cable** to connect the two.
 
-### The cable
+### The cable — get the chipset right
 
-The ÄKTA Prime is controlled over an **RS-232 serial** connection through a
-9-pin (DB-9) serial port on the instrument. This is the single most common
-source of trouble, so it is worth getting right:
+This is the single most important thing to get right, and the most common cause
+of trouble.
 
-- Most modern computers no longer have a built-in serial port, so you will
-  usually also need a **USB-to-RS-232 adaptor**. Inexpensive adaptors based on
-  the FTDI or Prolific chipsets are widely available and work well.
-- Connect the adaptor to the instrument with an appropriate RS-232 cable.
+The ÄKTA Prime is controlled over an **RS-232 serial** link through a 9-pin
+(DB-9) port on the instrument. Modern computers no longer have a serial port, so
+you connect through a **USB-to-serial (USB-to-RS-232) cable**.
 
-!!! warning "Confirm the exact cable type"
-    ⟦TODO: confirm and state the exact cable required — in particular whether a
-    **straight-through** or a **null-modem (crossover)** DB-9 cable is needed
-    between the adaptor and the instrument, and any recommended adaptor. This
-    should be filled in from the working setup before release.⟧
+!!! warning "Buy an FTDI cable, not a Prolific one"
+    Use a cable built around the **FTDI FT232RL** chipset. **Avoid cables that
+    use the PL2303 (Prolific) chipset** — they are cheaper but unreliable with
+    this instrument and can be very difficult to get working, especially on
+    Windows.
+
+A cable confirmed to work well:
+
+- **DTECH USB to Serial Adapter Cable with FTDI FT232RL Chipset, DB9 RS232 Male
+  Port.**
+
+This is a single cable — USB at the computer end, a 9-pin (DB-9) connector at
+the instrument end. No separate serial cable or null-modem adaptor is needed.
 
 The link runs at 9600 baud, 8 data bits, no parity, 1 stop bit; AktaPrime.jl
 configures this for you.
+
+### The computer
+
+Any ordinary desktop or laptop is fine. A small, inexpensive mini-PC works well
+and is easy to leave next to the instrument. A tested example:
+
+- **Dell OptiPlex 3060** (8th-generation Intel Core i3-8100T, 8 GB RAM, 128 GB
+  SSD) running **Windows 11 Pro** — works perfectly.
 
 ## Installing Julia
 
@@ -34,13 +48,21 @@ AktaPrime.jl runs on [Julia](https://julialang.org) version 1.12 or newer.
 
 1. Install Julia — the easiest way is [`juliaup`](https://github.com/JuliaLang/juliaup),
    or download an installer from [julialang.org/downloads](https://julialang.org/downloads/).
-2. Make sure the Julia application folder `~/.julia/bin` is on your `PATH`, so
-   that installed apps can be run by name. On macOS/Linux, add this to your
-   shell profile:
+2. Make sure the Julia application folder is on your `PATH`, so that installed
+   apps can be run by name.
+
+   **On macOS/Linux**, add this to your shell profile (`~/.bashrc`,
+   `~/.zshrc`, …):
 
    ```bash
    export PATH="$HOME/.julia/bin:$PATH"
    ```
+
+   **On Windows**, the folder is `%USERPROFILE%\.julia\bin` (for example
+   `C:\Users\yourname\.julia\bin`). Add it to your PATH via **Start menu →
+   "Edit environment variables for your account" → Path → New**, then paste that
+   folder. Close and reopen any terminal window afterwards so the change takes
+   effect.
 
 ## Installing AktaPrime
 
@@ -58,6 +80,25 @@ pkg> app up AktaPrime
 pkg> app rm AktaPrime
 ```
 
+## Opening a terminal
+
+AktaPrime.jl is started by typing a command in a terminal.
+
+- **Windows** — open the **Start** menu, type `cmd`, and press Enter to open the
+  **Command Prompt** (PowerShell works too). File paths on Windows use
+  backslashes and a drive letter, e.g. `C:\Users\yourname\Documents`. To move
+  into a folder, use `cd`, and if the folder is on a different drive, switch
+  drive first:
+
+  ```bat
+  D:
+  cd D:\akta_runs
+  ```
+- **macOS** — open **Terminal** (Applications → Utilities → Terminal).
+- **Linux** — open your terminal application.
+
+To check the app is installed and on your PATH, type `AktaPrime` and press Enter.
+
 ## Finding and setting the serial port
 
 AktaPrime.jl talks to the instrument through a named serial port. You tell it
@@ -65,11 +106,16 @@ which port to use once, and it remembers your choice.
 
 ### Windows
 
-1. Open **Device Manager** → **Ports (COM & LPT)**.
-2. Find your USB-to-serial adaptor; note its port name, e.g. `COM3`.
-3. Start the app with that port:
+1. Plug in the USB-to-serial cable and switch the instrument on.
+2. Open **Device Manager** (Start menu → type "Device Manager").
+3. Expand **Ports (COM & LPT)**. Your FTDI cable appears as something like
+   **USB Serial Port (COM3)** — note the `COM` number.
+   - If it does not appear, or shows a warning icon, install the FTDI driver
+     (search for "FTDI VCP driver"). Genuine FTDI FT232RL cables normally work
+     with the driver Windows installs automatically.
+4. In a Command Prompt, start the app with that port:
 
-   ```
+   ```bat
    AktaPrime COM3
    ```
 
