@@ -75,7 +75,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # build_gui — construct the Figure and wire all Observables
 # ─────────────────────────────────────────────────────────────────────────────
-function build_gui(app::AppState)::Figure
+function build_gui(app::AppState; viewer::Bool=false)::Figure
     fig = Figure(size=(1440, 900), backgroundcolor=:white)
 
     # Two independent sub-layouts: plots left, status+flow right.
@@ -90,7 +90,7 @@ function build_gui(app::AppState)::Figure
     # ── Chromatogram axes (UV always shown; the rest are toggleable) ───────────
     ax_uv = Axis(left[1, 1]; ylabel="UV (AU)", ygridvisible=true, xgridvisible=false)
     ax_pctb = Axis(left[2, 1]; ylabel="%B", ygridvisible=true, xgridvisible=false,
-        limits=(nothing, (0, 105)))
+        limits=(nothing, (-3, 103)))   # margin so the trace is visible at 0 %B and 100 %B
     ax_cond = Axis(left[3, 1]; ylabel="Conductivity (mS/cm)",
         ygridvisible=true, xgridvisible=false)
     ax_ph = Axis(left[4, 1]; ylabel="pH", ygridvisible=true, xgridvisible=false)
@@ -247,47 +247,20 @@ function build_gui(app::AppState)::Figure
     #     orientation=:horizontal, framevisible=false, tellwidth=false,
     #     labelsize=11, patchsize=(18, 2))
 
-    # ── Right panel: title, controls, status, flow schematic ───────────────────
+    # ── Right panel: title, controls, toggles, status, (flow schematic) ────────
     Label(right[1, 1], "AktaPrime.jl (v0.1.0)";
         halign=:center, fontsize=17, font=:bold, tellwidth=false)
 
-    # X-axis plotting mode — self-describing menu, no label needed
-    xmenu = Menu(right[2, 1];
+    # Controls: plotting-mode menu (left) + save-plot button (right)
+    controls = right[2, 1] = GridLayout(; tellwidth=false)
+    xmenu = Menu(controls[1, 1];
         options=["Plot vs time", "Plot vs volume"],
         default="Plot vs time", tellwidth=false, fontsize=13)
-
-    on(xmenu.selection) do sel
-        by_vol = sel == "Plot vs volume"
-        x_mode_is_vol[] = by_vol
-        lbl = by_vol ? "Volume (mL)" : "Time (min)"
-        for ax in (ax_uv, ax_pctb, ax_cond, ax_ph, ax_pres)
-            ax.xlabel = lbl
-        end
-    end
-
-    # Status read-out — left-aligned text
-    status_text = Observable("")
-    Label(right[3, 1], status_text;
-        halign=:left, justification=:left, tellwidth=false, fontsize=13)
-
-    on(app.inst) do s
-        inj = lowercase(_inject_label(s.inject_value))
-        route = s.fraction_vol_mL > 0 ? "frac collector" : "waste"
-        t_s = @sprintf("%.1f", s.run_time_ms / 1000)
-        v = @sprintf("%.4f", s.run_vol_mL)
-        status_text[] = """
-State:  $(rpad(s.run_state, 10))
-Run t:  $t_s s
-Run v:  $v mL
-Valve:  $inj
-Output: $route
-Frac #: $(s.fraction_number)
-Frac v: $(@sprintf("%.2f", s.fraction_vol_mL)) mL
-File:   $(basename(app.log_filename))"""
-    end
+    save_btn = Button(controls[1, 2]; label="Save plot…", fontsize=13)
+    colgap!(controls, 8)
 
     # ── 2×2 chart-visibility toggles ───────────────────────────────────────────
-    toggle_grid = right[4, 1] = GridLayout(; tellwidth=false, halign=:center)
+    toggle_grid = right[3, 1] = GridLayout(; tellwidth=false, halign=:center)
     Label(toggle_grid[1, 1], "%B"; halign=:right, fontsize=13)
     tg_pctb = Toggle(toggle_grid[1, 2], active=true)
     Label(toggle_grid[1, 3], "Cond"; halign=:right, fontsize=13)
@@ -298,16 +271,80 @@ File:   $(basename(app.log_filename))"""
     tg_pres = Toggle(toggle_grid[2, 4], active=true)
     colgap!(toggle_grid, 6)
 
-    # ── Flow path schematic ────────────────────────────────────────────────────
-    ax_flow = Axis(right[5, 1];
-        xgridvisible=false, ygridvisible=false,
-        xticksvisible=false, yticksvisible=false,
-        xticklabelsvisible=false, yticklabelsvisible=false,
-        leftspinevisible=false, rightspinevisible=false,
-        topspinevisible=false, bottomspinevisible=false,
-        limits=(0.3, 8.1, 1.3, 12.0))
+    # Zoom hint above the status read-out
+    Label(right[4, 1], "Drag to zoom · right-drag to pan · Ctrl-click to reset";
+        halign=:left, tellwidth=false, fontsize=11, color=:gray40)
 
-    _draw_flow_schematic!(ax_flow, app)
+    # ── Status read-out — left-aligned text ────────────────────────────────────
+    status_text = Observable("")
+    Label(right[5, 1], status_text;
+        halign=:left, justification=:left, tellwidth=false, fontsize=13)
+
+    if viewer
+        # Viewer/replay mode: no live instrument state — just show the file.
+        status_text[] = "File:   $(basename(app.log_filename))"
+    else
+        on(app.inst) do s
+            inj = lowercase(_inject_label(s.inject_value))
+            route = s.fraction_vol_mL > 0 ? "frac collector" : "waste"
+            t_s = @sprintf("%.1f", s.run_time_ms / 1000)
+            v = @sprintf("%.4f", s.run_vol_mL)
+            status_text[] = """
+State:  $(rpad(s.run_state, 10))
+Run t:  $t_s s
+Run v:  $v mL
+Valve:  $inj
+Output: $route
+Frac #: $(s.fraction_number)
+Frac v: $(@sprintf("%.2f", s.fraction_vol_mL)) mL
+File:   $(basename(app.log_filename))"""
+        end
+    end
+
+    # ── Flow path schematic (live mode only) ───────────────────────────────────
+    if !viewer
+        ax_flow = Axis(right[6, 1];
+            xgridvisible=false, ygridvisible=false,
+            xticksvisible=false, yticksvisible=false,
+            xticklabelsvisible=false, yticklabelsvisible=false,
+            leftspinevisible=false, rightspinevisible=false,
+            topspinevisible=false, bottomspinevisible=false,
+            limits=(0.3, 8.1, 1.3, 12.0))
+        _draw_flow_schematic!(ax_flow, app)
+    end
+
+    # Full-extent autoscale of the shared x-axis and the free (non-%B) y-axes.
+    rescale!() = (autolimits!(ax_uv); ylims!(ax_cond); ylims!(ax_ph); ylims!(ax_pres))
+
+    # On switching time<->volume, remap the current x view into the new units so
+    # the same stretch of the run stays in frame rather than jumping.
+    on(xmenu.selection) do sel
+        new_by_vol = sel == "Plot vs volume"
+        old_by_vol = x_mode_is_vol[]
+        xr = ax_uv.finallimits[]
+        xlo, xhi = xr.origin[1], xr.origin[1] + xr.widths[1]
+        trend = app.trend_data[]
+
+        x_mode_is_vol[] = new_by_vol
+        lbl = new_by_vol ? "Volume (mL)" : "Time (min)"
+        for ax in (ax_uv, ax_pctb, ax_cond, ax_ph, ax_pres)
+            ax.xlabel = lbl
+        end
+
+        if new_by_vol != old_by_vol && length(trend) > 1
+            xlims!(ax_uv, _map_x(trend, xlo, old_by_vol, new_by_vol),
+                _map_x(trend, xhi, old_by_vol, new_by_vol))
+        else
+            rescale!()
+        end
+    end
+
+    # Save the currently displayed plot (visible panels, current limits) to PDF.
+    fig_counter = Ref(0)
+    on(save_btn.clicks) do _
+        _save_plot_pdf(app, (ax_uv, ax_pctb, ax_cond, ax_ph, ax_pres),
+            (tg_pctb, tg_cond, tg_ph, tg_pres), x_mode_is_vol[], fig_counter)
+    end
 
     # ── Panel show/hide ─────────────────────────────────────────────────────────
     # Hiding a panel collapses its row *and* turns off its line and every
@@ -359,13 +396,132 @@ File:   $(basename(app.log_filename))"""
     notify(app.inst)
 
     on(app.trend_data) do _
-        autolimits!(ax_uv)
-        ylims!(ax_cond)
-        ylims!(ax_ph)
-        ylims!(ax_pres)
+        rescale!()
     end
 
     return fig
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Plot export helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+_channel_value(p::TrendPoint, chan::Symbol)::Float64 =
+    chan === :uv ? p.uv :
+    chan === :pctb ? p.pctb :
+    chan === :cond ? p.cond_mScm :
+    chan === :ph ? p.ph : p.pres_MPa
+
+# Map an x-coordinate from one unit (time/volume) to the other, using the trend
+# data as a monotonic lookup table with linear interpolation.
+function _map_x(trend::Vector{TrendPoint}, x::Real, from_vol::Bool, to_vol::Bool)
+    isempty(trend) && return Float64(x)
+    xs = [Float64(_trend_x(p, from_vol)) for p in trend]
+    ys = [Float64(_trend_x(p, to_vol)) for p in trend]
+    x <= xs[1] && return ys[1]
+    x >= xs[end] && return ys[end]
+    i = searchsortedlast(xs, x)
+    (i < 1 || i >= length(xs)) && return ys[clamp(i, 1, length(ys))]
+    frac = (x - xs[i]) / max(xs[i+1] - xs[i], eps())
+    ys[i] + frac * (ys[i+1] - ys[i])
+end
+
+# Shade fraction-collection spans (and optionally number them) on a static axis.
+function _draw_fraction_spans!(ax, fracs::Vector{Fraction}, trend::Vector{TrendPoint},
+    by_vol::Bool; labels::Bool=false)
+    isempty(fracs) && return
+    lastx = isempty(trend) ? 0.0 :
+            (by_vol ? trend[end].cum_vol_mL : trend[end].cum_time_ms / 60_000)
+    starts = Float64[]
+    ends = Float64[]
+    cols = RGBf[]
+    lblpts = Point2f[]
+    lbls = String[]
+    for (i, f) in enumerate(fracs)
+        x0 = by_vol ? f.start_vol_mL : f.start_time_ms / 60_000
+        x1 = if !isnothing(f.end_time_ms) && !isnothing(f.end_vol_mL)
+            by_vol ? f.end_vol_mL : f.end_time_ms / 60_000
+        else
+            lastx
+        end
+        if x1 > x0
+            push!(starts, x0)
+            push!(ends, x1)
+            push!(cols, FRAC_COLORS[mod1(i, length(FRAC_COLORS))])
+            push!(lblpts, Point2f((x0 + x1) / 2, 1.0f0))
+            push!(lbls, string(f.fraction_number))
+        end
+    end
+    isempty(starts) && return
+    vspan!(ax, starts, ends; color=cols, alpha=FRAC_ALPHA)
+    labels && text!(ax, lblpts; text=lbls, fontsize=12, color=:blue,
+        font=:bold, align=(:center, :bottom))
+    return
+end
+
+# Render the currently displayed chromatogram (only the visible panels, with the
+# current axis limits) to a PDF via CairoMakie.  Files are numbered per session:
+# <prefix>_<date>_<time>_figure_N.pdf
+function _save_plot_pdf(app::AppState, axes, toggles, by_vol::Bool, counter::Ref{Int})
+    trend = copy(app.trend_data[])
+    if isempty(trend)
+        @warn "Nothing to save yet — no data on the plot"
+        return
+    end
+    events = copy(app.events[])
+    fracs = copy(app.fractions[])
+    ax_uv, ax_pctb, ax_cond, ax_ph, ax_pres = axes
+    tg_pctb, tg_cond, tg_ph, tg_pres = toggles
+
+    # Visible panels top-to-bottom (UV always); keep the source axis for its y-limits.
+    specs = Tuple{Axis,Symbol,String,RGBf}[(ax_uv, :uv, "UV (AU)", COL_UV)]
+    tg_pctb.active[] && push!(specs, (ax_pctb, :pctb, "%B", COL_PCTB))
+    tg_cond.active[] && push!(specs, (ax_cond, :cond, "Conductivity (mS/cm)", COL_COND))
+    tg_ph.active[] && push!(specs, (ax_ph, :ph, "pH", COL_PH))
+    tg_pres.active[] && push!(specs, (ax_pres, :pres, "Pressure (MPa)", COL_PRES))
+
+    xr = ax_uv.finallimits[]
+    xlo, xhi = xr.origin[1], xr.origin[1] + xr.widths[1]
+    xlab = by_vol ? "Volume (mL)" : "Time (min)"
+
+    expfig = Figure(size=(1000, 220 * length(specs)), backgroundcolor=:white)
+    exaxes = Axis[]
+    for (i, (srcax, chan, ylab, col)) in enumerate(specs)
+        bottom = i == length(specs)
+        ax = Axis(expfig[i, 1]; ylabel=ylab, xlabel=(bottom ? xlab : ""),
+            xgridvisible=false, ygridvisible=true, xticklabelsvisible=bottom)
+        (chan === :uv || chan === :pctb) &&
+            _draw_fraction_spans!(ax, fracs, trend, by_vol; labels=(chan === :pctb))
+        if chan === :uv
+            for e in events
+                c, style = get(EVT_COLORS, e.kind, (:black, :dash))
+                vlines!(ax, [_event_x(e, by_vol)]; color=(c, 0.55), linestyle=style, linewidth=1.0)
+            end
+        end
+        lines!(ax, [Point2f(_trend_x(p, by_vol), _channel_value(p, chan)) for p in trend];
+            color=col, linewidth=1.5)
+        yr = srcax.finallimits[]
+        ylims!(ax, yr.origin[2], yr.origin[2] + yr.widths[2])
+        push!(exaxes, ax)
+    end
+    linkxaxes!(exaxes...)
+    xlims!(exaxes[1], xlo, xhi)
+
+    counter[] += 1
+    prefix = isempty(app.log_prefix) ? "akta" : app.log_prefix
+    stamp = Dates.format(Dates.now(), "yyyymmdd_HHMMSS")
+    path = "$(prefix)_$(stamp)_figure_$(counter[]).pdf"
+
+    CairoMakie.activate!()
+    try
+        save(path, expfig)
+        @info "Saved plot to $path"
+    catch err
+        @error "Could not save plot" exception = err
+    finally
+        GLMakie.activate!()
+    end
+    return
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

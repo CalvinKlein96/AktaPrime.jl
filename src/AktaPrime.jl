@@ -5,6 +5,7 @@ using Logging
 using Printf
 using Observables
 using GLMakie
+import CairoMakie   # used only to export plots to PDF; GLMakie stays the interactive backend
 using LibSerialPort
 using Preferences
 
@@ -38,7 +39,8 @@ function _run_replay(filename::AbstractString)
     load_csv_log!(app, filename_str)
     app.log_filename = filename_str
 
-    fig = build_gui(app)
+    GLMakie.activate!()   # ensure the interactive backend, not CairoMakie (used for PDF export)
+    fig = build_gui(app; viewer=true)
     screen = display(fig)
     @info "GUI opened (replay)"
 
@@ -223,6 +225,7 @@ function _run_live(serial_override::Union{Nothing,AbstractString}=nothing)
     end
 
     # ── Build and open the GUI ─────────────────────────────────────────────────
+    GLMakie.activate!()   # ensure the interactive backend, not CairoMakie (used for PDF export)
     fig = build_gui(app)
     screen = display(fig)
     @info "GUI opened"
