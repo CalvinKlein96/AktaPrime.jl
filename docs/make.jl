@@ -5,6 +5,7 @@ makedocs(
     authors = "Waudby lab",  # TODO: set full author list
     format = Documenter.HTML(
         prettyurls = get(ENV, "CI", nothing) == "true",
+        canonical = "https://waudbylab.org/AktaPrime.jl/stable/",
     ),
     warnonly = true,   # don't fail the build on a stray cross-reference
     pages = [
