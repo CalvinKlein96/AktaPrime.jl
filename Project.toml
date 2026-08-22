@@ -1,6 +1,6 @@
 name = "AktaPrime"
 uuid = "f5a23b8e-4c19-4d2b-b8f3-9e7c1d5a2043"
-version = "0.2.0"
+version = "0.2.1"
 
 [deps]
 CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
