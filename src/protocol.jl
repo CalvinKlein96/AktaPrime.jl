@@ -320,7 +320,7 @@ function _handle_run_state(data::Vector{UInt8}, app::AppState)
 
     state_name = get(RUN_STATE_NAMES, state, "Unknown(0x$(string(state, base=16)))")
     run_time_ms = run_time_raw / 10.0
-    run_vol_mL = run_vol_raw / 10.0
+    run_vol_mL = run_vol_raw / 100.0
 
     inst = app.inst[]
     changed = inst.run_state != state_name || inst.inject_value != inject
