@@ -1,0 +1,3 @@
+[AktaPrime]
+serial_port = "/dev/ttyUSB0"
+volume_unit_uL = 1.0

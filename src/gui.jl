@@ -6,6 +6,7 @@ const COL_COND = RGBf(0.80, 0.20, 0.10)
 const COL_PCTB = RGBf(0.10, 0.55, 0.25)
 const COL_PRES = RGBf(0.75, 0.45, 0.00)
 const COL_PH = RGBf(0.55, 0.25, 0.65)
+const COL_FLOW = RGBf(0.10, 0.45, 0.55)
 
 const COL_BUF_A = RGBf(0.80, 0.10, 0.10)   # red
 const COL_BUF_B = RGBf(0.90, 0.80, 0.05)   # yellow
@@ -64,6 +65,46 @@ _trend_x(p::TrendPoint, by_vol::Bool)::Float32 =
 _event_x(e::AktaEvent, by_vol::Bool)::Float32 =
     by_vol ? Float32(e.cum_vol_mL) : Float32(e.cum_time_ms / 60_000)
 
+# Set flow, as reported by the instrument's "Flow 1.0 ml/min" log messages.
+_flow_from_log(text::AbstractString)::Union{Nothing,Float64} =
+    let m = match(r"^Flow\s+([0-9]+(?:\.[0-9]+)?)\s*ml/min$"i, strip(text))
+        m === nothing ? nothing : parse(Float64, m.captures[1])
+    end
+
+# Step-plot points of the set flow: one per flow log event, with the last value
+# held up to the newest data point.
+function _flow_setpoints(events::AbstractVector{AktaEvent}, trend::AbstractVector{TrendPoint},
+    by_vol::Bool)::Vector{Point2f}
+    pts = Point2f[]
+    for e in events
+        e.kind == EVT_LOG || continue
+        flow = _flow_from_log(e.text)
+        isnothing(flow) || push!(pts, Point2f(_event_x(e, by_vol), flow))
+    end
+    if !isempty(pts) && !isempty(trend)
+        xend = _trend_x(trend[end], by_vol)
+        xend > pts[end][1] && push!(pts, Point2f(xend, pts[end][2]))
+    end
+    return pts
+end
+
+# Overlay mode: scale a trace to 0–100 % of its own range. %B already is a
+# percentage; flow is scaled from 0 so it reads as a fraction of the top flow.
+# Returns the scaled points and the (lo, hi) range that maps to 0–100 %.
+function _normalise(pts::AbstractVector{<:Point2}, key::Symbol)
+    key === :pctb && return Vector{Point2f}(pts), (0.0f0, 100.0f0)
+    ys = [p[2] for p in pts]
+    lo = key === :flow ? 0.0f0 : Float32(minimum(ys))
+    hi = Float32(maximum(ys))
+    span = hi - lo
+    scaled = span > 0 ? [Point2f(p[1], (p[2] - lo) / span * 100) for p in pts] :
+             [Point2f(p[1], 50) for p in pts]
+    return scaled, (lo, hi)
+end
+
+_overlay_label(name, unit, (lo, hi)) =
+    "━━  $name   ($(@sprintf("%.3g", lo))–$(@sprintf("%.3g", hi))$(isempty(unit) ? "" : " $unit"))"
+
 function _fraction_label_bottom(e::AktaEvent)::String
     # Show just the fraction number (no "F#" prefix)
     if (m = match(r"Feed Tube Nr\s+(\d+)", e.text)) !== nothing
@@ -100,12 +141,18 @@ function build_gui(app::AppState; viewer::Bool=false)::Figure
     ax_ph = Axis(left[4, 1]; ylabel="pH", ygridvisible=false, xgridvisible=false)
     ax_pres = Axis(left[5, 1]; ylabel="Pressure (MPa)",
         ygridvisible=false, xgridvisible=false)
+    ax_rate = Axis(left[6, 1]; ylabel="Flow (mL/min)",
+        ygridvisible=false, xgridvisible=false)
+    # Overlay mode: all traces on one axis, each scaled to 0–100 % of its range.
+    ax_ov = Axis(left[7, 1]; ylabel="Scaled (% of range)", ygridvisible=false,
+        xgridvisible=false, limits=(nothing, (-3, 103)))
+    plot_axes = (ax_uv, ax_pctb, ax_cond, ax_ph, ax_pres, ax_rate, ax_ov)
 
-    linkxaxes!(ax_uv, ax_pctb, ax_cond, ax_ph, ax_pres)
+    linkxaxes!(plot_axes...)
 
     # x label tracks the plotting mode; per-panel visibility is set by
     # refresh_panels! below so only the lowest visible panel carries it.
-    for ax in (ax_uv, ax_pctb, ax_cond, ax_ph, ax_pres)
+    for ax in plot_axes
         ax.xlabel = "Time (min)"
         ax.xticklabelsvisible = false
         ax.xlabelvisible = false
@@ -122,12 +169,17 @@ function build_gui(app::AppState; viewer::Bool=false)::Figure
     ph_pts = @lift [Point2f(_trend_x(p, $x_mode_is_vol), p.ph) for p in $_trend]
     pctb_pts = @lift [Point2f(_trend_x(p, $x_mode_is_vol), p.pctb) for p in $_trend]
     pres_pts = @lift [Point2f(_trend_x(p, $x_mode_is_vol), p.pres_MPa) for p in $_trend]
+    # Same empty-guard as _trend: a dummy point until the first flow message arrives.
+    rate_pts = @lift let pts = _flow_setpoints($(app.events), $(app.trend_data), $x_mode_is_vol)
+        isempty(pts) ? [Point2f(0, 0)] : pts
+    end
 
     lines!(ax_uv, uv_pts, color=COL_UV, linewidth=1.5)
     pl_pctb = lines!(ax_pctb, pctb_pts, color=COL_PCTB, linewidth=1.5)
     pl_cond = lines!(ax_cond, cond_pts, color=COL_COND, linewidth=1.5)
     pl_ph = lines!(ax_ph, ph_pts, color=COL_PH, linewidth=1.5)
     pl_pres = lines!(ax_pres, pres_pts, color=COL_PRES, linewidth=1.5)
+    pl_rate = stairs!(ax_rate, rate_pts; step=:post, color=COL_FLOW, linewidth=1.5)
 
     # ── Event vlines on UV panel ──────────────────────────────────────────────
     # xautolimits/yautolimits=false prevents Makie calling extrema on empty vectors.
@@ -136,8 +188,10 @@ function build_gui(app::AppState; viewer::Bool=false)::Figure
             color, style = get(EVT_COLORS, kind, (:black, :dash))
             evts_k = @lift filter(e -> e.kind == kind, $(app.events))
             evt_x_k = @lift [_event_x(e, $x_mode_is_vol) for e in $evts_k]
-            vlines!(ax_uv, evt_x_k; color=(color, 0.55), linestyle=style, linewidth=1.0,
-                xautolimits=false, yautolimits=false)
+            for ax in (ax_uv, ax_ov)
+                vlines!(ax, evt_x_k; color=(color, 0.55), linestyle=style, linewidth=1.0,
+                    xautolimits=false, yautolimits=false)
+            end
         end
     end
 
@@ -185,6 +239,8 @@ function build_gui(app::AppState; viewer::Bool=false)::Figure
     vspan!(ax_uv, frac_xstart, frac_xend;
         color=frac_colors, alpha=FRAC_ALPHA, xautolimits=false, yautolimits=false)
     vspan!(ax_pctb, frac_xstart, frac_xend;
+        color=frac_colors, alpha=FRAC_ALPHA, xautolimits=false, yautolimits=false)
+    vspan!(ax_ov, frac_xstart, frac_xend;
         color=frac_colors, alpha=FRAC_ALPHA, xautolimits=false, yautolimits=false)
 
     # Fraction number labels in %B panel near baseline (0%)
@@ -255,15 +311,17 @@ function build_gui(app::AppState; viewer::Bool=false)::Figure
     Label(right[1, 1], "AktaPrime.jl (v0.1.0)";
         halign=:center, fontsize=17, font=:bold, tellwidth=false)
 
-    # Controls: plotting-mode menu (left) + save-plot button (right)
+    # Controls: plotting-mode menu, overlay/stacked switch, save-plot button
     controls = right[2, 1] = GridLayout(; tellwidth=false)
     xmenu = Menu(controls[1, 1];
         options=["Plot vs time", "Plot vs volume"],
         default="Plot vs time", tellwidth=false, fontsize=13)
-    save_btn = Button(controls[1, 2]; label="Save plot…", fontsize=13)
+    overlay = Observable(false)
+    ov_btn = Button(controls[1, 2]; label="Overlay", fontsize=13)
+    save_btn = Button(controls[1, 3]; label="Save plot…", fontsize=13)
     colgap!(controls, 8)
 
-    # ── 2×2 chart-visibility toggles ───────────────────────────────────────────
+    # ── Chart-visibility toggles ───────────────────────────────────────────
     toggle_grid = right[3, 1] = GridLayout(; tellwidth=false, halign=:center)
     Label(toggle_grid[1, 1], "%B"; halign=:right, fontsize=13)
     tg_pctb = Toggle(toggle_grid[1, 2], active=true)
@@ -273,10 +331,16 @@ function build_gui(app::AppState; viewer::Bool=false)::Figure
     tg_ph = Toggle(toggle_grid[2, 2], active=true)
     Label(toggle_grid[2, 3], "Pressure"; halign=:right, fontsize=13)
     tg_pres = Toggle(toggle_grid[2, 4], active=true)
+    Label(toggle_grid[3, 1], "Flow"; halign=:right, fontsize=13)
+    tg_rate = Toggle(toggle_grid[3, 2], active=true)
+    # Follow live: auto-rescale to all data on each update. Switched off as soon
+    # as the user zooms or pans, so a zoomed view stays put while the run continues.
+    Label(toggle_grid[3, 3], "Follow live"; halign=:right, fontsize=13)
+    tg_follow = Toggle(toggle_grid[3, 4], active=true)
     colgap!(toggle_grid, 6)
 
     # Zoom hint above the status read-out
-    Label(right[4, 1], "Drag to zoom · Right-drag to pan · Ctrl-click to reset";
+    Label(right[4, 1], "Drag to zoom · Right-drag to pan · Ctrl-click to reset & follow";
         halign=:center, valign=:center, tellwidth=false, fontsize=11, color=:gray40)
 
     # ── Status read-out — left-aligned text ────────────────────────────────────
@@ -293,10 +357,13 @@ function build_gui(app::AppState; viewer::Bool=false)::Figure
             route = s.fraction_vol_mL > 0 ? "frac collector" : "waste"
             t_min = @sprintf("%.2f", s.run_time_ms / 60_000)
             v = @sprintf("%.4f", s.run_vol_mL)
+            flows = _flow_setpoints(app.events[], TrendPoint[], false)
+            flow = isempty(flows) ? "---" : @sprintf("%.2f mL/min", flows[end][2])
             status_text[] = """
 State: $(s.run_state)
 Run time: $t_min min
 Run volume: $v mL
+Flow: $flow
 Valve: $inj
 Output: $route
 Fraction #: $(s.fraction_number)
@@ -317,8 +384,15 @@ File: $(basename(app.log_filename))"""
         _draw_flow_schematic!(ax_flow, app)
     end
 
-    # Full-extent autoscale of the shared x-axis and the free (non-%B) y-axes.
-    rescale!() = (autolimits!(ax_uv); ylims!(ax_cond); ylims!(ax_ph); ylims!(ax_pres))
+    # Full-extent autoscale of every panel. All linked axes must be reset: one left
+    # zoomed keeps the shared x-range stuck. %B keeps its fixed range, flow starts at 0.
+    function rescale!()
+        for ax in plot_axes
+            ax.limits[] = ax === ax_pctb || ax === ax_ov ? (nothing, (-3, 103)) :
+                          ax === ax_rate ? (nothing, (0, nothing)) : (nothing, nothing)
+            reset_limits!(ax)
+        end
+    end
 
     # On switching time<->volume, relabel the x-axis and reset the limits to fit
     # the data in the new units (equivalent to a zoom reset). Live updates and
@@ -327,26 +401,91 @@ File: $(basename(app.log_filename))"""
         by_vol = sel == "Plot vs volume"
         x_mode_is_vol[] = by_vol
         lbl = by_vol ? "Volume (mL)" : "Time (min)"
-        for ax in (ax_uv, ax_pctb, ax_cond, ax_ph, ax_pres)
+        for ax in plot_axes
             ax.xlabel = lbl
         end
-        rescale!()
+        tg_follow.active[] = true   # notifies, so this also rescales
     end
 
     # Save the currently displayed plot (visible panels, current limits) to PDF.
     fig_counter = Ref(0)
     on(save_btn.clicks) do _
-        _save_plot_pdf(app, (ax_uv, ax_pctb, ax_cond, ax_ph, ax_pres),
-            (tg_pctb, tg_cond, tg_ph, tg_pres), x_mode_is_vol[], fig_counter)
+        _save_plot_pdf(app, plot_axes,
+            (tg_pctb, tg_cond, tg_ph, tg_pres, tg_rate), x_mode_is_vol[], fig_counter;
+            overlay=overlay[], highlighted=highlighted[])
+    end
+
+    # ── Overlay traces ──────────────────────────────────────────────────────────
+    # (key, name, unit, colour, points, visibility toggle — nothing means always shown)
+    ov_channels = (
+        (:uv, "UV", "AU", COL_UV, uv_pts, nothing),
+        (:pctb, "%B", "%", COL_PCTB, pctb_pts, tg_pctb),
+        (:cond, "Cond", "mS/cm", COL_COND, cond_pts, tg_cond),
+        (:ph, "pH", "", COL_PH, ph_pts, tg_ph),
+        (:pres, "Pressure", "MPa", COL_PRES, pres_pts, tg_pres),
+        (:flow, "Flow", "mL/min", COL_FLOW, rate_pts, tg_rate))
+
+    # Clicking a legend entry highlights that trace; clicking it again clears it.
+    highlighted = Observable{Union{Nothing,Symbol}}(nothing)
+    ov_plots = Dict{Symbol,Any}()
+    ov_labels = Dict{Symbol,Observable{String}}()
+    for (key, name, unit, col, pts, _) in ov_channels
+        norm = @lift _normalise($pts, key)
+        ov_labels[key] = @lift _overlay_label(name, unit, $norm[2])
+        color = @lift isnothing($highlighted) || $highlighted === key ?
+                      RGBAf(col.r, col.g, col.b, 1.0) : RGBAf(col.r, col.g, col.b, 0.2)
+        lw = @lift $highlighted === key ? 3.0 : 1.5
+        npts = @lift $norm[1]
+        ov_plots[key] = key === :flow ?
+                        stairs!(ax_ov, npts; step=:post, color=color, linewidth=lw) :
+                        lines!(ax_ov, npts; color=color, linewidth=lw)
+    end
+
+    # Legend: one button per visible trace, inside the top-left of the overlay axis.
+    # Rebuilt whenever the visible traces change.
+    legend = GridLayout(left[7, 1]; tellwidth=false, tellheight=false,
+        halign=:left, valign=:top, alignmode=Outside(8), default_rowgap=3)
+    legend_btns = Pair{Symbol,Button}[]
+
+    function style_legend!()
+        for (key, btn) in legend_btns
+            on_ = highlighted[] === key
+            btn.font = on_ ? :bold : :regular
+            btn.buttoncolor = on_ ? RGBf(0.90, 0.93, 0.98) : RGBAf(1, 1, 1, 0.85)
+        end
+    end
+
+    function rebuild_legend!()
+        foreach(kb -> delete!(kb[2]), legend_btns)
+        empty!(legend_btns)
+        trim!(legend)
+        overlay[] || return
+        for (key, _, _, col, _, tg) in ov_channels
+            (isnothing(tg) || tg.active[]) || continue
+            btn = Button(legend[length(legend_btns)+1, 1]; label=ov_labels[key],
+                fontsize=12, labelcolor=col, labelcolor_hover=col, labelcolor_active=col,
+                buttoncolor_hover=RGBf(0.95, 0.95, 0.95), buttoncolor_active=RGBf(0.85, 0.88, 0.95),
+                strokecolor=(col, 0.6), strokewidth=1, cornerradius=4,
+                padding=(6, 6, 3, 3), halign=:left)
+            on(btn.clicks) do _
+                highlighted[] = highlighted[] === key ? nothing : key
+                style_legend!()
+            end
+            push!(legend_btns, key => btn)
+        end
+        # A highlighted trace that was just hidden cannot stay highlighted.
+        any(kb -> kb[1] === highlighted[], legend_btns) || (highlighted[] = nothing)
+        style_legend!()
     end
 
     # ── Panel show/hide ─────────────────────────────────────────────────────────
-    # Hiding a panel collapses its row *and* turns off its line and every
+    # Hiding a panel collapses its row *and* turns off its plots and every
     # decoration, so no orphaned frame, ticks or labels are left behind.  UV is
-    # always shown; the toggles drive the other four.  The lowest visible panel
-    # carries the shared x tick labels and axis label.
-    panels = ((ax_pctb, pl_pctb, 2, tg_pctb), (ax_cond, pl_cond, 3, tg_cond),
-        (ax_ph, pl_ph, 4, tg_ph), (ax_pres, pl_pres, 5, tg_pres))
+    # always shown; the toggles drive the other five.  The lowest visible panel
+    # carries the shared x tick labels and axis label.  In overlay mode all the
+    # stacked panels collapse and only the overlay axis (row 7) is shown.
+    panels = ((ax_pctb, 2, tg_pctb), (ax_cond, 3, tg_cond),
+        (ax_ph, 4, tg_ph), (ax_pres, 5, tg_pres), (ax_rate, 6, tg_rate))
 
     function showaxis!(ax, vis)
         ax.ylabelvisible = vis
@@ -364,24 +503,50 @@ File: $(basename(app.log_filename))"""
         ax.xlabelvisible = false
     end
 
+    function setpanel!(ax, row, vis)
+        foreach(p -> p.visible[] = vis, ax.scene.plots)
+        showaxis!(ax, vis)
+        rowsize!(left, row, vis ? Auto() : Fixed(0))
+    end
+
+    gap0 = left.addedrowgaps[1]   # the layout's normal gap between panels
+
     function refresh_panels!()
-        visible = Axis[ax_uv]
-        showaxis!(ax_uv, true)
-        rowsize!(left, 1, Auto())
-        for (ax, pl, row, tg) in panels
-            vis = tg.active[]
-            pl.visible[] = vis
-            showaxis!(ax, vis)
-            rowsize!(left, row, vis ? Auto() : Fixed(0))
+        ov = overlay[]
+        visible = Axis[]
+        setpanel!(ax_uv, 1, !ov)
+        ov || push!(visible, ax_uv)
+        for (ax, row, tg) in panels
+            vis = !ov && tg.active[]
+            setpanel!(ax, row, vis)
             vis && push!(visible, ax)
+        end
+        setpanel!(ax_ov, 7, ov)
+        if ov
+            for (key, _, _, _, _, tg) in ov_channels
+                ov_plots[key].visible[] = isnothing(tg) || tg.active[]
+            end
+            push!(visible, ax_ov)
         end
         bottom = visible[end]
         bottom.xticklabelsvisible = true
         bottom.xlabelvisible = true
+        # Collapsed rows keep their gaps, so only keep a gap between two shown panels.
+        shown = [!ov; [!ov && tg.active[] for (_, _, tg) in panels]; ov]
+        for i in 1:6
+            rowgap!(left, i, shown[i] && any(shown[i+1:end]) ? gap0 : Fixed(0))
+        end
+        rebuild_legend!()
     end
 
-    for (_, _, _, tg) in panels
+    for (_, _, tg) in panels
         on(_ -> refresh_panels!(), tg.active)
+    end
+    on(ov_btn.clicks) do _
+        overlay[] = !overlay[]
+        ov_btn.label = overlay[] ? "Stacked" : "Overlay"
+        refresh_panels!()
+        tg_follow.active[] && rescale!()
     end
     refresh_panels!()
 
@@ -389,8 +554,27 @@ File: $(basename(app.log_filename))"""
     # that every listener has been registered.
     notify(app.inst)
 
+    # A user zoom/pan freezes the view; Ctrl-click (Makie's limit reset) resumes following.
+    for ax in plot_axes
+        register_interaction!(ax, :follow_live) do event, _
+            if event isa ScrollEvent ||
+               (event isa MouseEvent &&
+                event.type in (MouseEventTypes.leftdragstop, MouseEventTypes.rightdragstop))
+                tg_follow.active[] = false
+            elseif event isa MouseEvent && event.type == MouseEventTypes.leftclick &&
+                   ispressed(fig, Keyboard.left_control | Keyboard.right_control)
+                tg_follow.active[] = true
+            end
+            return Consume(false)
+        end
+    end
+
+    on(tg_follow.active) do follow
+        follow && rescale!()
+    end
+
     on(app.trend_data) do _
-        rescale!()
+        tg_follow.active[] && rescale!()
     end
 
     return fig
@@ -442,7 +626,8 @@ end
 # Render the currently displayed chromatogram (only the visible panels, with the
 # current axis limits) to a PDF via CairoMakie.  Files are numbered per session:
 # <prefix>_<date>_<time>_figure_N.pdf
-function _save_plot_pdf(app::AppState, axes, toggles, by_vol::Bool, counter::Ref{Int})
+function _save_plot_pdf(app::AppState, axes, toggles, by_vol::Bool, counter::Ref{Int};
+    overlay::Bool=false, highlighted::Union{Nothing,Symbol}=nothing)
     trend = copy(app.trend_data[])
     if isempty(trend)
         @warn "Nothing to save yet — no data on the plot"
@@ -450,8 +635,8 @@ function _save_plot_pdf(app::AppState, axes, toggles, by_vol::Bool, counter::Ref
     end
     events = copy(app.events[])
     fracs = copy(app.fractions[])
-    ax_uv, ax_pctb, ax_cond, ax_ph, ax_pres = axes
-    tg_pctb, tg_cond, tg_ph, tg_pres = toggles
+    ax_uv, ax_pctb, ax_cond, ax_ph, ax_pres, ax_rate, ax_ov = axes
+    tg_pctb, tg_cond, tg_ph, tg_pres, tg_rate = toggles
 
     # Visible panels top-to-bottom (UV always); keep the source axis for its y-limits.
     specs = Tuple{Axis,Symbol,String,RGBf}[(ax_uv, :uv, "UV (AU)", COL_UV)]
@@ -459,33 +644,15 @@ function _save_plot_pdf(app::AppState, axes, toggles, by_vol::Bool, counter::Ref
     tg_cond.active[] && push!(specs, (ax_cond, :cond, "Conductivity (mS/cm)", COL_COND))
     tg_ph.active[] && push!(specs, (ax_ph, :ph, "pH", COL_PH))
     tg_pres.active[] && push!(specs, (ax_pres, :pres, "Pressure (MPa)", COL_PRES))
+    tg_rate.active[] && push!(specs, (ax_rate, :flow, "Flow (mL/min)", COL_FLOW))
 
     xr = ax_uv.finallimits[]
     xlo, xhi = xr.origin[1], xr.origin[1] + xr.widths[1]
     xlab = by_vol ? "Volume (mL)" : "Time (min)"
 
-    expfig = Figure(size=(1000, 220 * length(specs)), backgroundcolor=:white)
-    exaxes = Axis[]
-    for (i, (srcax, chan, ylab, col)) in enumerate(specs)
-        bottom = i == length(specs)
-        ax = Axis(expfig[i, 1]; ylabel=ylab, xlabel=(bottom ? xlab : ""),
-            xgridvisible=false, ygridvisible=false, xticklabelsvisible=bottom)
-        (chan === :uv || chan === :pctb) &&
-            _draw_fraction_spans!(ax, fracs, trend, by_vol; labels=(chan === :pctb))
-        if chan === :uv
-            for e in events
-                c, style = get(EVT_COLORS, e.kind, (:black, :dash))
-                vlines!(ax, [_event_x(e, by_vol)]; color=(c, 0.55), linestyle=style, linewidth=1.0)
-            end
-        end
-        lines!(ax, [Point2f(_trend_x(p, by_vol), _channel_value(p, chan)) for p in trend];
-            color=col, linewidth=1.5)
-        yr = srcax.finallimits[]
-        ylims!(ax, yr.origin[2], yr.origin[2] + yr.widths[2])
-        push!(exaxes, ax)
-    end
-    linkxaxes!(exaxes...)
-    xlims!(exaxes[1], xlo, xhi)
+    expfig = overlay ?
+             _overlay_export_fig(trend, events, fracs, specs, ax_ov, by_vol, xlab, (xlo, xhi), highlighted) :
+             _stacked_export_fig(trend, events, fracs, specs, by_vol, xlab, (xlo, xhi))
 
     counter[] += 1
     prefix = isempty(app.log_prefix) ? "akta" : app.log_prefix
@@ -502,6 +669,74 @@ function _save_plot_pdf(app::AppState, axes, toggles, by_vol::Bool, counter::Ref
         GLMakie.activate!()
     end
     return
+end
+
+# Data points of one channel for export, in the current x units.
+_export_points(chan::Symbol, trend, events, by_vol::Bool)::Vector{Point2f} =
+    chan === :flow ? _flow_setpoints(events, trend, by_vol) :
+    [Point2f(_trend_x(p, by_vol), _channel_value(p, chan)) for p in trend]
+
+# Stacked export: one panel per visible channel, each with its on-screen y-limits.
+function _stacked_export_fig(trend, events, fracs, specs, by_vol::Bool, xlab, (xlo, xhi))
+    expfig = Figure(size=(1000, 220 * length(specs)), backgroundcolor=:white)
+    exaxes = Axis[]
+    for (i, (srcax, chan, ylab, col)) in enumerate(specs)
+        bottom = i == length(specs)
+        ax = Axis(expfig[i, 1]; ylabel=ylab, xlabel=(bottom ? xlab : ""),
+            xgridvisible=false, ygridvisible=false, xticklabelsvisible=bottom)
+        (chan === :uv || chan === :pctb) &&
+            _draw_fraction_spans!(ax, fracs, trend, by_vol; labels=(chan === :pctb))
+        if chan === :uv
+            for e in events
+                c, style = get(EVT_COLORS, e.kind, (:black, :dash))
+                vlines!(ax, [_event_x(e, by_vol)]; color=(c, 0.55), linestyle=style, linewidth=1.0)
+            end
+        end
+        pts = _export_points(chan, trend, events, by_vol)
+        if chan === :flow
+            isempty(pts) || stairs!(ax, pts; step=:post, color=col, linewidth=1.5)
+        else
+            lines!(ax, pts; color=col, linewidth=1.5)
+        end
+        yr = srcax.finallimits[]
+        ylims!(ax, yr.origin[2], yr.origin[2] + yr.widths[2])
+        push!(exaxes, ax)
+    end
+    linkxaxes!(exaxes...)
+    xlims!(exaxes[1], xlo, xhi)
+    return expfig
+end
+
+# Overlay export: every visible channel on one axis scaled to 0–100 %, with the
+# on-screen highlight and a legend giving each trace's real range.
+function _overlay_export_fig(trend, events, fracs, specs, ax_ov, by_vol::Bool, xlab,
+    (xlo, xhi), highlighted)
+    expfig = Figure(size=(1000, 500), backgroundcolor=:white)
+    ax = Axis(expfig[1, 1]; ylabel="Scaled (% of range)", xlabel=xlab,
+        xgridvisible=false, ygridvisible=false)
+    _draw_fraction_spans!(ax, fracs, trend, by_vol)
+    for e in events
+        c, style = get(EVT_COLORS, e.kind, (:black, :dash))
+        vlines!(ax, [_event_x(e, by_vol)]; color=(c, 0.55), linestyle=style, linewidth=1.0)
+    end
+    names = Dict(:uv => ("UV", "AU"), :pctb => ("%B", "%"), :cond => ("Cond", "mS/cm"),
+        :ph => ("pH", ""), :pres => ("Pressure", "MPa"), :flow => ("Flow", "mL/min"))
+    for (_, chan, _, col) in specs
+        pts = _export_points(chan, trend, events, by_vol)
+        isempty(pts) && continue
+        scaled, range = _normalise(pts, chan)
+        dim = !isnothing(highlighted) && highlighted !== chan
+        color = RGBAf(col.r, col.g, col.b, dim ? 0.2 : 1.0)
+        lw = highlighted === chan ? 3.0 : 1.5
+        label = replace(_overlay_label(names[chan]..., range), "━━  " => "")
+        chan === :flow ?
+            stairs!(ax, scaled; step=:post, color=color, linewidth=lw, label=label) :
+            lines!(ax, scaled; color=color, linewidth=lw, label=label)
+    end
+    axislegend(ax; position=:lt, framevisible=true, labelsize=11)
+    yr = ax_ov.finallimits[]
+    limits!(ax, xlo, xhi, yr.origin[2], yr.origin[2] + yr.widths[2])
+    return expfig
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

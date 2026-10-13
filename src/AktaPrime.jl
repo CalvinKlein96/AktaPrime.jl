@@ -17,6 +17,7 @@ include("gui.jl")
 export main
 
 const SERIAL_PORT_PREFERENCE_KEY = "serial_port"
+const VOLUME_UNIT_PREFERENCE_KEY = "volume_unit_uL"   # 10 for ÄKTAprime plus, 1 for ÄKTAprime
 const GITHUB_URL = "https://github.com/waudbylab/AktaPrime.jl"
 
 _is_logfile_arg(path::AbstractString)::Bool = endswith(lowercase(path), ".csv")
@@ -170,6 +171,8 @@ function _run_live(serial_override::Union{Nothing,AbstractString}=nothing)
     global_logger(ConsoleLogger(stderr, Logging.Info))
 
     serial_port = _effective_serial_port(serial_override)
+    VOLUME_UNIT_UL[] = Float64(@load_preference(VOLUME_UNIT_PREFERENCE_KEY, DEFAULT_VOLUME_UNIT_UL))
+    @info "Volume counter unit: $(VOLUME_UNIT_UL[]) µL"
 
     # ── Is an instrument reachable on the serial port? ─────────────────────────
     # If the port cannot be opened we fall back to demo mode; this is a normal,

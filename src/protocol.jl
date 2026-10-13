@@ -10,8 +10,17 @@ const BAUD_RATE = 9600
 
 # ── Timing constants ──────────────────────────────────────────────────────────
 const POLL_INTERVAL_MS = 100
-const IDLE_TIMEOUT_MS = 5000
+const IDLE_TIMEOUT_MS = 5000      # silence before we warn and start probing (never disconnects)
+const PROBE_INTERVAL_MS = 1000    # while silent, send a poll frame this often to catch a link reset
 const REPLY_TIMEOUT_MS = 500
+
+# ── Volume counter resolution ─────────────────────────────────────────────────
+# All volume fields (trend Δv, base, run and step volume) are counts of this many
+# µL. 10 µL was confirmed on an ÄKTAprime plus; an ÄKTAprime that reads 10x too
+# high needs 1 µL. Set from the `volume_unit_uL` preference at startup.
+const DEFAULT_VOLUME_UNIT_UL = 10.0
+const VOLUME_UNIT_UL = Ref(DEFAULT_VOLUME_UNIT_UL)
+_vol_mL(raw::Real)::Float64 = Float64(raw) * VOLUME_UNIT_UL[] / 1000.0
 
 # ── Frame byte constants ──────────────────────────────────────────────────────
 const FRAME_START = 0x23        # '#'
@@ -58,8 +67,37 @@ mutable struct LinkState
     pending_tx::Bool
     idle_ms::Int
     driver_enabled::Bool
+    silent::Bool
+    probe_ms::Int
 end
-LinkState() = LinkState(false, 0x00, 0x00, false, 0, false)
+LinkState() = LinkState(false, 0x00, 0x00, false, 0, false, false, 0)
+
+# (Re)initialise the link after a connect handshake from the Akta.
+function _link_reset!(st::LinkState, tx_queue::Channel)
+    st.sn = 0x00
+    st.rn = 0x00
+    st.pending_tx = false
+    st.idle_ms = 0
+    st.probe_ms = 0
+    st.silent = false
+    st.connected = true
+    st.driver_enabled = false
+    while isready(tx_queue)
+        take!(tx_queue)
+    end
+    put!(tx_queue, (OPC_IDENTITY_REQUEST, UInt8[0x00]))
+end
+
+# Any valid frame from the Akta proves the link is alive.
+function _link_alive!(st::LinkState, app::AppState)
+    st.idle_ms = 0
+    st.probe_ms = 0
+    if st.silent
+        st.silent = false
+        @info "Akta responding again"
+        push_event!(app, EVT_LOG, "Link: Akta responding again")
+    end
+end
 
 # ── Frame helpers (unchanged from linklayer.jl) ───────────────────────────────
 
@@ -216,8 +254,17 @@ function _handle_trend_data(data::Vector{UInt8}, app::AppState)
     length(data) < 14 && (@warn "OPC 0x2001: short payload ($(length(data)) bytes)"; return)
 
     inst = app.inst[]
-    inst.cum_time_ms += Float64(data[1]) * 10.0     # Δt: units 10 ms
-    inst.cum_vol_mL += Float64(data[2]) / 100.0    # Δv: units 0.1 µl → mL
+    dt_ms = Float64(data[1]) * 10.0                # Δt: units 10 ms
+    dv_mL = _vol_mL(data[2])                       # Δv: volume counts → mL
+    inst.cum_time_ms += dt_ms
+    inst.cum_vol_mL += dv_mL
+    # The ÄKTAprime sends OPC 0x2003 only on state changes, so run time/volume
+    # would otherwise freeze at the run-start value. Advance them with the trend
+    # deltas during a run; the next 0x2003 overwrites them with the instrument's values.
+    if inst.run_state in ("Run", "Pause", "Hold", "Continue")
+        inst.run_time_ms += dt_ms
+        inst.run_vol_mL += dv_mL
+    end
 
     uv_raw = Int32(data[3]) | (Int32(data[4]) << 8) | (Int32(data[5]) << 16)
     if (data[5] & 0x80) != 0
@@ -252,8 +299,8 @@ function _handle_base_time_vol(data::Vector{UInt8}, app::AppState)
     length(data) < 8 && (@warn "OPC 0x2002: short payload"; return)
     base_time_ms = Float64(UInt32(data[1]) | (UInt32(data[2]) << 8) |
                            (UInt32(data[3]) << 16) | (UInt32(data[4]) << 24)) * 10.0
-    base_vol_mL = Float64(UInt32(data[5]) | (UInt32(data[6]) << 8) |
-                          (UInt32(data[7]) << 16) | (UInt32(data[8]) << 24)) / 100.0
+    base_vol_mL = _vol_mL(UInt32(data[5]) | (UInt32(data[6]) << 8) |
+                          (UInt32(data[7]) << 16) | (UInt32(data[8]) << 24))
     inst = app.inst[]
     # A base that jumps backwards means the instrument's run counter has
     # restarted — a new run. Roll to a fresh log so traces do not overlap.
@@ -320,7 +367,7 @@ function _handle_run_state(data::Vector{UInt8}, app::AppState)
 
     state_name = get(RUN_STATE_NAMES, state, "Unknown(0x$(string(state, base=16)))")
     run_time_ms = run_time_raw / 10.0
-    run_vol_mL = run_vol_raw / 100.0
+    run_vol_mL = _vol_mL(run_vol_raw)
 
     inst = app.inst[]
     changed = inst.run_state != state_name || inst.inject_value != inject
@@ -349,8 +396,8 @@ function _handle_step_time_vol(data::Vector{UInt8}, app::AppState)
     length(data) < 8 && (@warn "OPC 0x2006: short payload"; return)
     step_time_ms = Float64(UInt32(data[1]) | (UInt32(data[2]) << 8) |
                            (UInt32(data[3]) << 16) | (UInt32(data[4]) << 24)) * 10.0
-    step_vol_mL = Float64(UInt32(data[5]) | (UInt32(data[6]) << 8) |
-                          (UInt32(data[7]) << 16) | (UInt32(data[8]) << 24)) / 100.0
+    step_vol_mL = _vol_mL(UInt32(data[5]) | (UInt32(data[6]) << 8) |
+                          (UInt32(data[7]) << 16) | (UInt32(data[8]) << 24))
     inst = app.inst[]
     inst.step_time_ms = step_time_ms
     inst.step_vol_mL = step_vol_mL
@@ -535,28 +582,39 @@ function run_linklayer(tx_queue::Channel, shutdown::Ref{Bool}, app::AppState,
             elapsed_ms = Int((t_now - t_last) ÷ 1_000_000)
             t_last = t_now
 
+            probing = false
             if !st.connected
                 while isready(tx_queue)
                     take!(tx_queue)
                 end
                 cur_frame = poll_frame
 
-            elseif !st.pending_tx
-                st.idle_ms += elapsed_ms
-                if isready(tx_queue)
-                    opc, data = take!(tx_queue)
-                    payload = encode_opc_payload(opc, data)
-                    st.sn = (st.sn + 0x01) & 0x03
-                    cur_frame = build_i_frame(payload, st.sn, st.rn)
-                    st.pending_tx = true
-                else
-                    cur_frame = build_ack_frame(st.rn)
-                end
             else
                 st.idle_ms += elapsed_ms
+                # While the Akta is silent, interleave poll frames: if it has
+                # reset its link it answers with CTRL_CONN and we resync below.
+                if st.idle_ms > IDLE_TIMEOUT_MS
+                    st.probe_ms += elapsed_ms
+                    if st.probe_ms >= PROBE_INTERVAL_MS
+                        st.probe_ms = 0
+                        probing = true
+                    end
+                end
+                if !probing && !st.pending_tx
+                    if isready(tx_queue)
+                        opc, data = take!(tx_queue)
+                        payload = encode_opc_payload(opc, data)
+                        st.sn = (st.sn + 0x01) & 0x03
+                        cur_frame = build_i_frame(payload, st.sn, st.rn)
+                        st.pending_tx = true
+                    else
+                        cur_frame = build_ack_frame(st.rn)
+                    end
+                end
             end
 
-            reply = write_frame_read_reply(sp, cur_frame)
+            # cur_frame is kept intact while probing so a pending I-frame is retransmitted later
+            reply = write_frame_read_reply(sp, probing ? poll_frame : cur_frame)
             rx_len = length(reply)
 
             if rx_len > 0 && validate_rx_frame(reply, rx_len)
@@ -565,33 +623,37 @@ function run_linklayer(tx_queue::Channel, shutdown::Ref{Bool}, app::AppState,
                 if !st.connected
                     if rx_len == 5 && ctrl == CTRL_CONN
                         @info "Akta connected"
-                        st.sn = 0x00
-                        st.rn = 0x00
-                        st.pending_tx = false
-                        st.idle_ms = 0
-                        st.connected = true
+                        _link_reset!(st, tx_queue)
                         push_event!(app, EVT_CONNECT, "Akta connected")
-                        put!(tx_queue, (OPC_IDENTITY_REQUEST, UInt8[0x00]))
                     else
                         @warn "Unexpected frame while disconnected: ctrl=0x$(string(ctrl, base=16))"
                     end
 
                 else
-                    rx_ok = false
-                    if (ctrl & 0xf0) == CTRL_IFRAME
+                    _link_alive!(st, app)
+
+                    if rx_len == 5 && ctrl == CTRL_CONN
+                        # The Akta restarted its side of the link: resync rather than drop out
+                        @warn "Akta re-established the link — resynchronising"
+                        _link_reset!(st, tx_queue)
+                        push_event!(app, EVT_LOG, "Link: Akta re-established the link")
+
+                    elseif (ctrl & 0xf0) == CTRL_IFRAME
                         received_sn = (ctrl >> 2) & 0x03
                         if received_sn == (st.rn + 0x01) & 0x03
                             st.rn = received_sn
                             parse_rx_data_frame(reply, rx_len, tx_queue, st, app)
-                            rx_ok = true
                         elseif received_sn == st.rn
                             @warn "LinkLayer: duplicate I-frame SN=$received_sn"
                         else
-                            @warn "LinkLayer: SN error — expected $((st.rn+1)&3), got $received_sn"
+                            # Frames were lost; accept this one and resync, otherwise the
+                            # Akta retransmits it forever and nothing more is recorded.
+                            @warn "LinkLayer: SN error — expected $((st.rn+1)&3), got $received_sn; resynchronising"
+                            st.rn = received_sn
+                            parse_rx_data_frame(reply, rx_len, tx_queue, st, app)
                         end
                         if st.sn == (ctrl & 0x03)
                             st.pending_tx = false
-                            rx_ok && (st.idle_ms = 0)
                         else
                             @warn "LinkLayer: RN mismatch in I-frame ctrl"
                         end
@@ -599,7 +661,6 @@ function run_linklayer(tx_queue::Channel, shutdown::Ref{Bool}, app::AppState,
                     elseif (ctrl & 0xfc) == CTRL_RR_BASE
                         if st.sn == (ctrl & 0x03)
                             st.pending_tx = false
-                            st.idle_ms = 0
                         else
                             @warn "LinkLayer: RN mismatch in RR frame"
                         end
@@ -610,14 +671,11 @@ function run_linklayer(tx_queue::Channel, shutdown::Ref{Bool}, app::AppState,
                 end
             end
 
-            if st.connected && st.idle_ms > IDLE_TIMEOUT_MS
-                @warn "Idle timeout — disconnecting"
-                st.connected = false
-                st.pending_tx = false
-                st.driver_enabled = false
-                app.inst[].run_state = "---"
-                notify(app.inst)
-                push_event!(app, EVT_DISCONNECT, "Idle timeout — disconnected")
+            # Never disconnect on silence: keep the link and the log open and just report it
+            if st.connected && !st.silent && st.idle_ms > IDLE_TIMEOUT_MS
+                st.silent = true
+                @warn "No response from Akta for $(st.idle_ms ÷ 1000) s — staying connected, probing"
+                push_event!(app, EVT_LOG, "Link: no response from Akta — waiting")
             end
         end
 
