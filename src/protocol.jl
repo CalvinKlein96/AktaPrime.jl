@@ -664,12 +664,29 @@ end
 # by the main thread, since Makie and the app state are not thread-safe.
 # Without `rx_actions` everything runs inline (single-task use and tests).
 function run_linklayer(tx_queue::Channel, shutdown::Ref{Bool}, app::AppState,
-    serial_port::AbstractString=DEFAULT_SERIAL_PORT; rx_actions::Union{Nothing,Channel}=nothing)
+    serial_port::AbstractString=DEFAULT_SERIAL_PORT; rx_actions::Union{Nothing,Channel}=nothing,
+    status::Union{Nothing,Observable{String}}=nothing)
     post = isnothing(rx_actions) ? (f -> f()) : (f -> put!(rx_actions, f))
+    say(txt) = isnothing(status) || post(() -> status[] = txt)   # connection state for the GUI
     LINK_OWN_THREAD[] = Threads.threadid() != 1
     @info "Link layer on thread $(Threads.threadid())" * (LINK_OWN_THREAD[] ? "" : " (shared with the GUI)")
-    @info "Opening $serial_port at $BAUD_RATE baud"
-    sp = LibSerialPort.open(serial_port, BAUD_RATE)
+
+    # A missing or unplugged adaptor is retried until it appears, not fatal.
+    sp = nothing
+    warned = false
+    while isnothing(sp) && !shutdown[]
+        try
+            sp = LibSerialPort.open(serial_port, BAUD_RATE)
+        catch err
+            warned || @warn "Serial port $serial_port not available — retrying" exception = err
+            warned || say("Serial port $serial_port not available — retrying")
+            warned = true
+            _link_sleep(2.0)
+        end
+    end
+    isnothing(sp) && return
+    @info "Opened $serial_port at $BAUD_RATE baud"
+    say("Waiting for Akta on $serial_port")
     set_flow_control(sp; rts=SP_RTS_ON, cts=SP_CTS_IGNORE, dtr=SP_DTR_ON, dsr=SP_DSR_IGNORE)
 
     st = LinkState()
@@ -733,11 +750,13 @@ function run_linklayer(tx_queue::Channel, shutdown::Ref{Bool}, app::AppState,
                         @info "Akta connected"
                         _link_reset!(st, tx_queue)
                         post(() -> push_event!(app, EVT_CONNECT, "Akta connected"))
+                        say("● Connected on $serial_port")
                     else
                         @warn "Unexpected frame while disconnected: ctrl=0x$(string(ctrl, base=16))"
                     end
 
                 else
+                    st.silent && say("● Connected on $serial_port")
                     _link_alive!(st, app, post)
 
                     if rx_len == 5 && ctrl == CTRL_CONN
@@ -784,6 +803,7 @@ function run_linklayer(tx_queue::Channel, shutdown::Ref{Bool}, app::AppState,
                 st.silent = true
                 @warn "No response from Akta for $(st.idle_ms ÷ 1000) s — staying connected, probing"
                 post(() -> push_event!(app, EVT_LOG, "Link: no response from Akta — waiting"))
+                say("No response from Akta on $serial_port — waiting")
             end
         end
 

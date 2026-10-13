@@ -184,6 +184,79 @@ function _event_labels!(ax, evts, x_mode_is_vol; avoid=Observable(nothing))
         align=(:left, :top), xautolimits=false, yautolimits=false)
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Inspecting a past moment
+# ─────────────────────────────────────────────────────────────────────────────
+const _INJECT_NAMES = Dict(string(v) => v for v in instances(InjectValue))
+
+# Instrument state at a past moment, rebuilt by replaying the logged events up to
+# `p` with the same decoders the live link uses. Every event is in the CSV, so
+# this works for reopened logs too.
+function _state_at(events::AbstractVector{AktaEvent}, p::TrendPoint)::InstrumentState
+    s = InstrumentState()
+    for e in events
+        e.cum_time_ms <= p.cum_time_ms || continue
+        if e.kind == EVT_RUN_STATE
+            m = match(r"Run state:\s*(\S+)\s+inject=(\w+)", e.text)
+            if !isnothing(m)
+                s.run_state = m.captures[1]
+                s.inject_value = get(_INJECT_NAMES, m.captures[2], s.inject_value)
+            end
+        elseif e.kind == EVT_LOG
+            if (m = match(r"^Method start:.*buffer port (\d+), inject (\w+)", e.text)) !== nothing
+                s.buffer_port = parse(Int, m.captures[1])
+                s.buffer_port_known = true
+                inj = lowercase(m.captures[2])
+                s.inject_value = inj == "load" ? IV_LOAD : inj == "inj" ? IV_INJECT :
+                                 inj == "waste" ? IV_WASTE : s.inject_value
+            elseif (m = match(r"^Fraction size\s+([0-9.]+)\s+ml$"i, strip(e.text))) !== nothing
+                s.fraction_vol_mL = parse(Float64, m.captures[1])
+            elseif (m = match(r"^Feed Tube Nr\s+(\d+)$"i, strip(e.text))) !== nothing
+                s.fraction_number = max(1, parse(Int, m.captures[1]))
+            else
+                _set_inject_from_log!(e.text, s) || _set_buffer_valve_from_log!(e.text, s)
+            end
+        end
+    end
+    s.cum_time_ms = s.run_time_ms = p.cum_time_ms
+    s.cum_vol_mL = s.run_vol_mL = p.cum_vol_mL
+    return s
+end
+
+# Set flow (mL/min) in force at `p`, or nothing before the first flow message.
+function _flow_at(events::AbstractVector{AktaEvent}, p::TrendPoint)
+    flow = nothing
+    for e in events
+        e.kind == EVT_LOG && e.cum_time_ms <= p.cum_time_ms || continue
+        f = _flow_from_log(e.text)
+        isnothing(f) || (flow = f)
+    end
+    return flow
+end
+
+function _status_text(s::InstrumentState, p::Union{Nothing,TrendPoint}, flow, header::String,
+    file::String)::String
+    port = s.buffer_port == 1 ? "1 (A)" : s.buffer_port == 8 ? "8 (sample)" : string(s.buffer_port)
+    port *= s.buffer_port_known ? "" : " — assumed"
+    values = isnothing(p) ? "" : """
+
+UV: $(@sprintf("%.4f", p.uv)) AU   %B: $(@sprintf("%.1f", p.pctb))
+Cond: $(@sprintf("%.2f", p.cond_mScm)) mS/cm   pH: $(@sprintf("%.2f", p.ph))
+Pressure: $(@sprintf("%.3f", p.pres_MPa)) MPa   T: $(@sprintf("%.1f", p.temp_degC)) °C"""
+    return """
+$header
+State: $(s.run_state)
+Run time: $(@sprintf("%.2f", s.run_time_ms / 60_000)) min
+Run volume: $(@sprintf("%.4f", s.run_vol_mL)) mL
+Flow: $(isnothing(flow) ? "---" : @sprintf("%.2f mL/min", flow))
+Valve: $(lowercase(_inject_label(s.inject_value)))
+Buffer valve: $port
+Output: $(s.fraction_vol_mL > 0 ? "frac collector" : "waste")
+Fraction #: $(s.fraction_number)
+Fraction volume: $(@sprintf("%.2f", s.fraction_vol_mL)) mL$values
+File: $file"""
+end
+
 function _fraction_label_bottom(e::AktaEvent)::String
     # Show just the fraction number (no "F#" prefix)
     if (m = match(r"Feed Tube Nr\s+(\d+)", e.text)) !== nothing
@@ -195,19 +268,22 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # build_gui — construct the Figure and wire all Observables
 # ─────────────────────────────────────────────────────────────────────────────
-function build_gui(app::AppState; viewer::Bool=false)::Figure
+function build_gui(app::AppState; viewer::Bool=false, topbar=nothing)::Figure
     fig = Figure(size=(1440, 900), backgroundcolor=:white)
+
+    # Optional top bar (menu and tabs, see workspace.jl) above everything else.
+    body = isnothing(topbar) ? fig.layout : (fig[2, 1] = GridLayout())
+    isnothing(topbar) || topbar(fig[1, 1])
 
     # Two independent sub-layouts: plots left, status+flow right.
     # Nesting gives each side its own row-size control.
-    left = fig[1, 1] = GridLayout()
-    right = fig[1, 2] = GridLayout(; valign=:top)
-    colsize!(fig.layout, 1, Relative(0.75))
-    colsize!(fig.layout, 2, Relative(0.25))
-    # Force the single row to fill the figure height. Without this, in viewer
-    # mode (where the right column has no height-filling flow schematic) the row
-    # would shrink to the right column's content and squash the plots.
-    rowsize!(fig.layout, 1, Relative(1))
+    left = body[1, 1] = GridLayout()
+    right = body[1, 2] = GridLayout(; valign=:top)
+    colsize!(body, 1, Relative(0.75))
+    colsize!(body, 2, Relative(0.25))
+    # Force the single row to fill the height. Without this, in viewer mode the
+    # row could shrink to the right column's content and squash the plots.
+    rowsize!(body, 1, Relative(1))
 
     x_mode_is_vol = Observable(false)
 
@@ -407,52 +483,34 @@ function build_gui(app::AppState; viewer::Bool=false)::Figure
     colgap!(toggle_grid, 6)
 
     # Zoom hint above the status read-out
-    Label(right[4, 1], "Drag to zoom · Right-drag to pan · Ctrl-click to reset & follow";
+    Label(right[4, 1], "Drag to zoom · Right-drag to pan · Ctrl-click to reset & follow\nAlt- or Shift-click to inspect a moment";
         halign=:center, valign=:center, tellwidth=false, fontsize=11, color=:gray40)
 
+    # ── Shown moment: live, or a past moment picked with the time slider ──────
+    # The status text and schematic show `shown_state` / `shown_point`: the live
+    # instrument state, or the state rebuilt from the log at the selected moment.
+    # In viewer mode there is no live state, so the end of the log is the default.
+    following = Observable(true)                 # slider at the end
+    shown_state = Observable(app.inst[])
+    shown_point = Observable{Union{Nothing,TrendPoint}}(nothing)
+    shown_header = Observable("")
+
     # ── Status read-out — left-aligned text ────────────────────────────────────
-    status_text = Observable("")
+    status_text = @lift _status_text($shown_state, $shown_point,
+        isnothing($shown_point) ? nothing : _flow_at(app.events[], $shown_point),
+        $shown_header, basename(app.log_filename))
     Label(right[5, 1], status_text;
         halign=:left, justification=:left, tellwidth=false, fontsize=13)
 
-    if viewer
-        # Viewer/replay mode: no live instrument state — just show the file.
-        status_text[] = "File:   $(basename(app.log_filename))"
-    else
-        on(app.inst) do s
-            inj = lowercase(_inject_label(s.inject_value))
-            route = s.fraction_vol_mL > 0 ? "frac collector" : "waste"
-            t_min = @sprintf("%.2f", s.run_time_ms / 60_000)
-            v = @sprintf("%.4f", s.run_vol_mL)
-            flows = _flow_setpoints(app.events[], TrendPoint[], false)
-            flow = isempty(flows) ? "---" : @sprintf("%.2f mL/min", flows[end][2])
-            port = s.buffer_port == 1 ? "1 (A)" : s.buffer_port == 8 ? "8 (sample)" : string(s.buffer_port)
-            port *= s.buffer_port_known ? "" : " — assumed"
-            status_text[] = """
-State: $(s.run_state)
-Run time: $t_min min
-Run volume: $v mL
-Flow: $flow
-Valve: $inj
-Buffer valve: $port
-Output: $route
-Fraction #: $(s.fraction_number)
-Fraction volume: $(@sprintf("%.2f", s.fraction_vol_mL)) mL
-File: $(basename(app.log_filename))"""
-        end
-    end
-
-    # ── Flow path schematic (live mode only) ───────────────────────────────────
-    if !viewer
-        ax_flow = Axis(right[6, 1];
-            xgridvisible=false, ygridvisible=false,
-            xticksvisible=false, yticksvisible=false,
-            xticklabelsvisible=false, yticklabelsvisible=false,
-            leftspinevisible=false, rightspinevisible=false,
-            topspinevisible=false, bottomspinevisible=false,
-            limits=(0.3, 8.1, 1.3, 13.3))
-        _draw_flow_schematic!(ax_flow, app)
-    end
+    # ── Flow path schematic ─────────────────────────────────────────────────────
+    ax_flow = Axis(right[6, 1];
+        xgridvisible=false, ygridvisible=false,
+        xticksvisible=false, yticksvisible=false,
+        xticklabelsvisible=false, yticklabelsvisible=false,
+        leftspinevisible=false, rightspinevisible=false,
+        topspinevisible=false, bottomspinevisible=false,
+        limits=(0.3, 8.1, 1.3, 13.3))
+    _draw_flow_schematic!(ax_flow, shown_state, shown_point)
 
     # Full-extent autoscale of every panel. All linked axes must be reset: one left
     # zoomed keeps the shared x-range stuck. %B keeps its fixed range, flow starts at 0.
@@ -645,10 +703,6 @@ File: $(basename(app.log_filename))"""
     end
     refresh_panels!()
 
-    # Populate all on(app.inst) callbacks (status text + flow schematic) now
-    # that every listener has been registered.
-    notify(app.inst)
-
     # A user zoom/pan freezes the view; Ctrl-click (Makie's limit reset) resumes following.
     for ax in plot_axes
         register_interaction!(ax, :follow_live) do event, _
@@ -671,6 +725,79 @@ File: $(basename(app.log_filename))"""
     on(app.trend_data) do _
         tg_follow.active[] && rescale!()
     end
+
+    # ── Time slider: inspect a past moment ─────────────────────────────────────
+    # Selects a trend point; at the right end it follows the newest data. The
+    # moment is marked in every panel, and status + schematic show its state.
+    slider_row = left[8, 1] = GridLayout(; tellwidth=false)
+    sel_slider = Slider(slider_row[1, 1]; range=1:1, startvalue=1)
+    sel_label = Label(slider_row[1, 2], ""; width=170, halign=:left, fontsize=13)
+    end_btn = Button(slider_row[1, 3]; label=viewer ? "End" : "Live", fontsize=13)
+    colgap!(slider_row, 10)
+
+    function update_shown!()
+        td = app.trend_data[]
+        i = clamp(sel_slider.value[], 1, max(1, length(td)))
+        p = isempty(td) ? nothing : td[i]
+        if following[] && !viewer
+            shown_state[] = app.inst[]
+            shown_header[] = "● Live"
+            sel_label.text = "Live"
+        elseif isnothing(p)
+            shown_header[] = ""
+            sel_label.text = ""
+        else
+            shown_state[] = _state_at(app.events[], p)
+            where = @sprintf("%.2f min · %.3f mL", p.cum_time_ms / 60_000, p.cum_vol_mL)
+            shown_header[] = (following[] ? "End of log: " : "◀ Viewing: ") * where
+            sel_label.text = where
+        end
+        shown_point[] = p
+    end
+
+    on(sel_slider.value) do i
+        following[] = i >= length(app.trend_data[])
+        update_shown!()
+    end
+    on(end_btn.clicks) do _
+        set_close_to!(sel_slider, length(app.trend_data[]))
+        following[] = true
+        update_shown!()
+    end
+    # New data: extend the slider; keep the newest point selected while following.
+    on(app.trend_data) do td
+        sel_slider.range[] = 1:max(1, length(td))
+        following[] ? set_close_to!(sel_slider, length(td)) : update_shown!()
+    end
+    live_view() = following[] && !viewer
+    on(_ -> live_view() && update_shown!(), app.inst)            # live state changed
+    on(_ -> live_view() || update_shown!(), app.events)          # a past state may change
+
+    # Dashed marker at the selected moment in every panel (none while following live).
+    marker_x = @lift begin
+        td = $(app.trend_data)
+        $following || isempty(td) ? Float32[] :
+            [_trend_x(td[clamp($(sel_slider.value), 1, length(td))], $x_mode_is_vol)]
+    end
+    for ax in plot_axes
+        vlines!(ax, marker_x; color=(:black, 0.7), linestyle=:dash, linewidth=1.5,
+            xautolimits=false, yautolimits=false)
+        # Alt- or Shift-click jumps the slider to the nearest data point.
+        register_interaction!(ax, :inspect_moment) do event, _
+            event isa MouseEvent && event.type == MouseEventTypes.leftclick || return Consume(false)
+            ispressed(fig, Keyboard.left_alt | Keyboard.right_alt | Keyboard.left_shift |
+                           Keyboard.right_shift) || return Consume(false)
+            td = app.trend_data[]
+            isempty(td) && return Consume(false)
+            xs = _trend_x.(td, x_mode_is_vol[])
+            set_close_to!(sel_slider, argmin(abs.(xs .- event.data[1])))
+            return Consume(true)
+        end
+    end
+
+    sel_slider.range[] = 1:max(1, length(app.trend_data[]))
+    set_close_to!(sel_slider, length(app.trend_data[]))
+    update_shown!()
 
     return fig
 end
@@ -840,7 +967,8 @@ function _overlay_export!(pos, trend, events, fracs, specs, by_vol::Bool, xlab,
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-function _draw_flow_schematic!(ax, app::AppState)
+function _draw_flow_schematic!(ax, state::Observable{InstrumentState},
+    point::Observable{Union{Nothing,TrendPoint}})
     function box!(ax, cx, cy, w, h, label; color=:lightblue, fontsize=9)
         poly!(ax, Rect2f(cx - w / 2, cy - h / 2, w, h);
             color=color, strokecolor=:black, strokewidth=1)
@@ -936,19 +1064,16 @@ function _draw_flow_schematic!(ax, app::AppState)
 
     # ── MIXER — colour blends BufA→BufB by %B ────────────────────────────────
     mixer_color = @lift begin
-        td = $(app.trend_data)
-        a = port_color($(app.inst).buffer_port)
-        f = isempty(td) ? 0.0 : clamp(td[end].pctb / 100.0, 0.0, 1.0)
+        p = $point
+        a = port_color($state.buffer_port)
+        f = isnothing(p) ? 0.0 : clamp(p.pctb / 100.0, 0.0, 1.0)
         RGBf((1 - f) * a.r + f * COL_BUF_B.r,
             (1 - f) * a.g + f * COL_BUF_B.g,
             (1 - f) * a.b + f * COL_BUF_B.b)
     end
     poly!(ax, Rect2f(x_c - 0.65, y_mix - 0.36, 1.30, 0.72);
         color=mixer_color, strokecolor=:black, strokewidth=1)
-    mixer_label = @lift begin
-        td = $(app.trend_data)
-        isempty(td) ? "MIX" : @sprintf("%.0f%%B", td[end].pctb)
-    end
+    mixer_label = @lift isnothing($point) ? "MIX" : @sprintf("%.0f%%B", $point.pctb)
     text!(ax, x_c, y_mix; text=mixer_label, fontsize=11,
         align=(:center, :center), font=:bold)
 
@@ -959,7 +1084,7 @@ function _draw_flow_schematic!(ax, app::AppState)
     out_txt = text!(ax, x_c, y_out - 0.95; text="TO WASTE", fontsize=11,
         align=(:center, :center), font=:bold, color=:gray35)
 
-    on(app.inst) do s
+    on(state) do s
         is_load = s.inject_value == IV_LOAD
         is_inj = s.inject_value == IV_INJECT
         is_wst = s.inject_value == IV_WASTE

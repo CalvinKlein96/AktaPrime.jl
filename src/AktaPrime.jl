@@ -8,29 +8,22 @@ using GLMakie
 import CairoMakie   # used only to export plots to PDF; GLMakie stays the interactive backend
 using LibSerialPort
 using Preferences
+import NativeFileDialog
 
 include("types.jl")
 include("csv_writer.jl")   # must come before protocol (push_event! calls write_csv_event)
 include("method.jl")
 include("protocol.jl")
+include("settings.jl")
 include("gui.jl")
+include("acquisition.jl")
+include("workspace.jl")
 
 export main
 
-const SERIAL_PORT_PREFERENCE_KEY = "serial_port"
-const VOLUME_UNIT_PREFERENCE_KEY = "volume_unit_uL"   # 10 for ÄKTAprime plus, 1 for ÄKTAprime
 const GITHUB_URL = "https://github.com/waudbylab/AktaPrime.jl"
 
 _is_logfile_arg(path::AbstractString)::Bool = endswith(lowercase(path), ".csv")
-
-function _effective_serial_port(serial_override::Union{Nothing,AbstractString})::String
-    if serial_override === nothing
-        return @load_preference(SERIAL_PORT_PREFERENCE_KEY, DEFAULT_SERIAL_PORT)
-    end
-    serial_port = String(serial_override)
-    @set_preferences!(SERIAL_PORT_PREFERENCE_KEY => serial_port)
-    return serial_port
-end
 
 function _run_replay(filename::AbstractString)
     filename_str = String(filename)
@@ -166,126 +159,46 @@ function _run_demo_run(shutdown::Ref{Bool}, app::AppState)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# main — application entry point
+# main application — window with tabs; the live source is chosen in Settings
 # ─────────────────────────────────────────────────────────────────────────────
 function _run_live(serial_override::Union{Nothing,AbstractString}=nothing)
     global_logger(ConsoleLogger(stderr, Logging.Info))
 
-    serial_port = _effective_serial_port(serial_override)
-    VOLUME_UNIT_UL[] = Float64(@load_preference(VOLUME_UNIT_PREFERENCE_KEY, DEFAULT_VOLUME_UNIT_UL))
-    @info "Volume counter unit: $(VOLUME_UNIT_UL[]) µL"
-
-    # ── Is an instrument reachable on the serial port? ─────────────────────────
-    # If the port cannot be opened we fall back to demo mode; this is a normal,
-    # expected path (e.g. no instrument connected), not an error — the friendly
-    # startup banner below explains it and how to connect a real instrument.
-    demo_mode = false
-    try
-        sp_check = LibSerialPort.open(serial_port, BAUD_RATE)
-        LibSerialPort.close(sp_check)
-    catch
-        demo_mode = true
+    settings = load_settings()
+    if !isnothing(serial_override)
+        settings.serial_port = String(serial_override)
+        save_settings(settings)
     end
+    _print_banner(settings)
 
     app = AppState()
-    tx_queue = Channel{Tuple{UInt16,Vector{UInt8}}}(32)
-    shutdown = Ref(false)
+    acq = start!(Acquisition(app, settings))
 
-    # ── Choose a log-file prefix and open the first file *before* acquisition ──
-    # starts, so nothing is ever recorded before the user has named the output.
-    app.log_prefix = _prompt_log_prefix(demo_mode, serial_port)
-    csv_filename = newlogname(app)
-    app.csv_io = init_csv(csv_filename)
-    demo_mode || (RAW_IO[] = open(replace(csv_filename, r"\.csv$" => "_raw.txt"), "w"))
-    app.log_filename = csv_filename
-
-    # ── Start link layer or demo runner ────────────────────────────────────────
-    link_task = if demo_mode
-        @info "Starting demo mode"
-        t = @async Base.invokelatest(run_demo, shutdown, app)
-        yield()   # let the task push EVT_CONNECT before we begin polling
-        t
-    else
-        @info "Connecting to Akta at $serial_port..."
-        # The link polls on its own thread, so a busy GUI (e.g. opening the window)
-        # cannot silence it; what it receives is applied here on the main thread.
-        rx_actions = Channel{Function}(Inf)
-        consumer = @async for action in rx_actions
-            try
-                Base.invokelatest(action)
-            catch err
-                @error "Error handling Akta data" exception = (err, catch_backtrace())
-            end
-        end
-        t = Threads.@spawn :default Base.invokelatest(run_linklayer, tx_queue, shutdown, app,
-            serial_port; rx_actions)
-        # Once the link has stopped, let the consumer finish what is still queued.
-        @async (try wait(t) catch end; close(rx_actions))
-        t
-    end
-    Threads.nthreads(:default) == 0 &&
-        @warn "No worker thread available: the serial link shares the GUI thread"
-
-    # ── Wait for EVT_CONNECT ───────────────────────────────────────────────────
-    timeout_s = demo_mode ? 3.0 : 30.0
-    t0 = time()
-    while time() - t0 < timeout_s
-        any(e -> e.kind == EVT_CONNECT, app.events[]) && break
-        if istaskdone(link_task)
-            @error "Link task exited unexpectedly: $(link_task.exception)"
-            break
-        end
-        sleep(0.1)
-    end
-
-    if !any(e -> e.kind == EVT_CONNECT, app.events[])
-        @error "No Akta connection after $(Int(timeout_s)) s — aborting"
-        shutdown[] = true
-        try
-            wait(link_task)
-        catch
-        end
-        close(app.csv_io)
-        rm(app.log_filename; force=true)   # discard the empty, unused log
-        if !isnothing(RAW_IO[])
-            close(RAW_IO[])
-            rm(replace(app.log_filename, r"\.csv$" => "_raw.txt"); force=true)
-        end
-        return
-    end
-
-    # ── Build and open the GUI ─────────────────────────────────────────────────
     # activate!: ensure the interactive backend (not CairoMakie, used for PDF export)
-    GLMakie.activate!(; title="AktaPrime Acquisition")
-    fig = build_gui(app)
-    screen = display(fig)
+    GLMakie.activate!(; title="AktaPrime")
+    ws = Workspace(acq)
+    live = add_page!(topbar -> build_gui(app; topbar), ws, "Live"; closable=false)
+    ws.active = live
+    ws.tabs_changed[] += 1
+    ws.screen = display(live.fig)
     @info "GUI opened"
 
     # ── Run until the window is closed or Ctrl-C ──────────────────────────────
     Base.exit_on_sigint(false)
     try
-        while isopen(screen)
+        while isopen(ws.screen)
             sleep(0.05)
         end
     catch e
         e isa InterruptException || rethrow()
         @info "Interrupted"
     finally
-        shutdown[] = true
-        try
-            wait(link_task)
-            demo_mode || wait(consumer)   # apply everything still queued before closing files
-        catch
-        end
-        close(app.csv_io)
-        isnothing(RAW_IO[]) || close(RAW_IO[])
+        stop!(acq)                 # applies everything still queued, then closes the files
         _report_output(app)
     end
 end
 
-# Print friendly startup help and read the log-file prefix from the console.
-function _prompt_log_prefix(demo_mode::Bool, serial_port::AbstractString)::String
-    default_prefix = demo_mode ? "akta_demo" : "akta"
+function _print_banner(s::Settings)
     bar = "─"^64
     println()
     println(bar)
@@ -293,58 +206,14 @@ function _prompt_log_prefix(demo_mode::Bool, serial_port::AbstractString)::Strin
     println("  $GITHUB_URL")
     println(bar)
     println()
-
-    if demo_mode
-        println("  No instrument was found on the serial port:")
-        println("      $serial_port")
-        println()
-        println("  Starting in DEMO MODE with simulated data, so you can explore")
-        println("  the interface without an instrument connected.")
-        println()
-        println("  To use a real Akta PRIME instead:")
-        println()
-        println("    1. Connect the instrument to this computer's serial port,")
-        println("       directly or via a USB-to-serial adaptor, and switch it on.")
-        println()
-        println("    2. Restart the app, giving it the port name, for example:")
-        println()
-        println("           AktaPrime $serial_port")
-        println()
-        println("       The port name is remembered, so next time you can just")
-        println("       run  AktaPrime  on its own.")
-        println()
-    else
-        println("  Using serial port:")
-        println("      $serial_port")
-        println()
-        println("  The instrument will be contacted once you have chosen a prefix.")
-        println()
-    end
-
+    println(s.demo_mode ? "  DEMO MODE — simulated data (switch off under Settings)." :
+                          "  Serial port: $(s.serial_port) (change under Settings).")
+    println("  Log files: $(pwd())/$(s.log_prefix)_<date>_<time>.csv")
+    println("  A new file is started for every run; logs without data are discarded.")
     println(bar)
     println()
-    println("  Data are saved as CSV files in the current folder:")
-    println()
-    println("      $(pwd())")
-    println()
-    println("  Each run is written to its own file, named:")
-    println()
-    println("      <prefix>_<date>_<time>.csv")
-    println()
-    println("  A fresh file is started automatically whenever a new run begins,")
-    println("  so successive runs never overwrite or overlap one another.")
-    println()
-    println("  The prefix is simply a label to help you find these files later,")
-    println("  such as a sample name or your initials.")
-    println()
-    println(bar)
-    println()
-    print("  Log-file prefix  (press ENTER for \"$default_prefix\"): ")
-    input = strip(readline())
-    return isempty(input) ? default_prefix : String(input)
 end
 
-# Tell the user where their data ended up when logging stops.
 function _report_output(app::AppState)
     bar = "─"^64
     println()
