@@ -1,0 +1,633 @@
+[ Info: Volume counter unit: 1.0 µL
+[ Info: Logging to probe3_20261013_163254.csv
+[ Info: Connecting to Akta at /dev/ttyUSB0...
+[ Info: Opening /dev/ttyUSB0 at 9600 baud
+┌ Warning: Probe replies active: 2015=2016:010001
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:508
+[ Info: Link layer started; polling for Akta
+┌ Debug: TX 23 30 53 35 0d  |#0S5.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: TX 23 30 53 35 0d  |#0S5.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 75 58 0d  |#1uX.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+[ Info: Akta connected
+[ Info: [EVT_CONNECT] Akta connected
+[ Info: GUI opened
+┌ Debug: TX 23 30 53 35 0d  |#0S5.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Warning: No response from Akta for 15 s — staying connected, probing
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:759
+[ Info: [EVT_LOG] Link: no response from Akta — waiting
+┌ Debug: TX 23 30 44 32 31 30 31 30 30 4a 0d  |#0D210100J.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: TX 23 30 53 35 0d  |#0S5.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 75 58 0d  |#1uX.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+[ Info: Akta responding again
+[ Info: [EVT_LOG] Link: Akta responding again
+┌ Warning: Akta re-established the link — resynchronising
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:719
+[ Info: [EVT_LOG] Link: Akta re-established the link
+┌ Debug: TX 23 30 44 32 31 30 31 30 30 4a 0d  |#0D210100J.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 45 39 31 30 38 41 4b 54 41 70 72 69 6d 65 35 32 30 38 56 32 2e 30 31 5d 0d  |#1E9108AKTAprime5208V2.01].|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+[ Info: Programme name: AKTAprime
+[ Info: Version: V2.01
+[ Info: Queued driver-enable (OPC 0x1001/0x01)
+┌ Debug: TX 23 30 49 32 31 30 31 31 30 50 0d  |#0I210110P.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 32 54 0d  |#12T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 31 52 0d  |#01R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 32 54 0d  |#12T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 31 52 0d  |#01R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 32 54 0d  |#12T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 31 52 0d  |#01R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 32 54 0d  |#12T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 31 52 0d  |#01R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 32 54 0d  |#12T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 31 52 0d  |#01R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 32 54 0d  |#12T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 31 52 0d  |#01R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 32 54 0d  |#12T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 31 52 0d  |#01R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 32 54 0d  |#12T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 31 52 0d  |#01R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 32 54 0d  |#12T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 31 52 0d  |#01R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 32 54 0d  |#12T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 31 52 0d  |#01R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 32 54 0d  |#12T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 31 52 0d  |#01R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 32 54 0d  |#12T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 31 52 0d  |#01R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 32 54 0d  |#12T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 31 52 0d  |#01R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 32 54 0d  |#12T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 31 52 0d  |#01R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 32 54 0d  |#12T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 31 52 0d  |#01R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 32 54 0d  |#12T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 31 52 0d  |#01R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 32 54 0d  |#12T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 31 52 0d  |#01R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 32 54 0d  |#12T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 31 52 0d  |#01R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 32 54 0d  |#12T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 31 52 0d  |#01R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 32 54 0d  |#12T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 31 52 0d  |#01R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 32 54 0d  |#12T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 31 52 0d  |#01R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 32 54 0d  |#12T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 31 52 0d  |#01R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 32 54 0d  |#12T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 31 52 0d  |#01R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 32 54 0d  |#12T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 31 52 0d  |#01R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 32 54 0d  |#12T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 31 52 0d  |#01R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 32 54 0d  |#12T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 31 52 0d  |#01R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 32 54 0d  |#12T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 31 52 0d  |#01R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 32 54 0d  |#12T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 31 52 0d  |#01R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 32 54 0d  |#12T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 31 52 0d  |#01R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 32 54 0d  |#12T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 31 52 0d  |#01R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 32 54 0d  |#12T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 31 52 0d  |#01R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 32 54 0d  |#12T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 31 52 0d  |#01R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 32 54 0d  |#12T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 31 52 0d  |#01R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 32 54 0d  |#12T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 31 52 0d  |#01R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 4a 35 45 30 32 31 30 30 31 30 3a 0d  |#1J5E0210010:.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+[ Info: Probe: answered 0x2015 with 0x2016 [010001]
+[ Info: Unknown OPC 0x2015: 3 bytes
+┌ Debug: TX 23 30 4e 35 46 30 32 31 30 30 31 30 3e 0d  |#0N5F0210010>.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 33 55 0d  |#13U.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 32 53 0d  |#02S.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 33 55 0d  |#13U.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 32 53 0d  |#02S.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 33 55 0d  |#13U.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 32 53 0d  |#02S.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 33 55 0d  |#13U.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 32 53 0d  |#02S.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 33 55 0d  |#13U.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 32 53 0d  |#02S.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 33 55 0d  |#13U.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 32 53 0d  |#02S.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 33 55 0d  |#13U.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 32 53 0d  |#02S.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 33 55 0d  |#13U.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 32 53 0d  |#02S.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 33 55 0d  |#13U.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 32 53 0d  |#02S.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 33 55 0d  |#13U.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 32 53 0d  |#02S.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 33 55 0d  |#13U.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 32 53 0d  |#02S.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 33 55 0d  |#13U.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 32 53 0d  |#02S.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 33 55 0d  |#13U.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 32 53 0d  |#02S.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 33 55 0d  |#13U.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 32 53 0d  |#02S.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 33 55 0d  |#13U.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 32 53 0d  |#02S.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 33 55 0d  |#13U.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 32 53 0d  |#02S.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 33 55 0d  |#13U.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 32 53 0d  |#02S.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 33 55 0d  |#13U.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 32 53 0d  |#02S.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 33 55 0d  |#13U.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 32 53 0d  |#02S.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 33 55 0d  |#13U.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 32 53 0d  |#02S.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 33 55 0d  |#13U.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 32 53 0d  |#02S.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 4f 35 45 30 32 31 30 30 31 30 3f 0d  |#1O5E0210010?.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+[ Info: Probe: answered 0x2015 with 0x2016 [010001]
+[ Info: Unknown OPC 0x2015: 3 bytes
+┌ Debug: TX 23 30 43 35 46 30 32 31 30 30 31 30 33 0d  |#0C5F02100103.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+┌ Debug: TX 23 30 33 54 0d  |#03T.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:612
+┌ Debug: RX 23 31 30 52 0d  |#10R.|
+└ @ AktaPrime ~/dev/AktaPrime-debug/src/protocol.jl:636
+[ Info: Link layer shutting down
+[ Info: Logging stopped — 0 trend points in the final run

@@ -207,8 +207,24 @@ function _run_live(serial_override::Union{Nothing,AbstractString}=nothing)
         t
     else
         @info "Connecting to Akta at $serial_port..."
-        @async Base.invokelatest(run_linklayer, tx_queue, shutdown, app, serial_port)
+        # The link polls on its own thread, so a busy GUI (e.g. opening the window)
+        # cannot silence it; what it receives is applied here on the main thread.
+        rx_actions = Channel{Function}(Inf)
+        consumer = @async for action in rx_actions
+            try
+                Base.invokelatest(action)
+            catch err
+                @error "Error handling Akta data" exception = (err, catch_backtrace())
+            end
+        end
+        t = Threads.@spawn :default Base.invokelatest(run_linklayer, tx_queue, shutdown, app,
+            serial_port; rx_actions)
+        # Once the link has stopped, let the consumer finish what is still queued.
+        @async (try wait(t) catch end; close(rx_actions))
+        t
     end
+    Threads.nthreads(:default) == 0 &&
+        @warn "No worker thread available: the serial link shares the GUI thread"
 
     # ── Wait for EVT_CONNECT ───────────────────────────────────────────────────
     timeout_s = demo_mode ? 3.0 : 30.0
@@ -225,6 +241,10 @@ function _run_live(serial_override::Union{Nothing,AbstractString}=nothing)
     if !any(e -> e.kind == EVT_CONNECT, app.events[])
         @error "No Akta connection after $(Int(timeout_s)) s — aborting"
         shutdown[] = true
+        try
+            wait(link_task)
+        catch
+        end
         close(app.csv_io)
         rm(app.log_filename; force=true)   # discard the empty, unused log
         if !isnothing(RAW_IO[])
@@ -252,12 +272,13 @@ function _run_live(serial_override::Union{Nothing,AbstractString}=nothing)
         @info "Interrupted"
     finally
         shutdown[] = true
-        close(app.csv_io)
-        isnothing(RAW_IO[]) || close(RAW_IO[])
         try
             wait(link_task)
+            demo_mode || wait(consumer)   # apply everything still queued before closing files
         catch
         end
+        close(app.csv_io)
+        isnothing(RAW_IO[]) || close(RAW_IO[])
         _report_output(app)
     end
 end
