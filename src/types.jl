@@ -61,8 +61,13 @@ mutable struct InstrumentState
     fraction_number::Int
     fraction_vol_mL::Float64
     current_fraction_idx::Union{Int,Nothing}  # index into app.fractions[] of active fraction, or nothing if idle
+    buffer_port::Int           # buffer valve inlet port 1–8 feeding the A side
+    buffer_port_known::Bool    # false until a "Buffer Valve Pos N" message confirms buffer_port
 end
-InstrumentState() = InstrumentState("---", 0.0, 0.0, 0.0, 0.0, IV_UNKNOWN, "", "", 0.0, 0.0, 1, 0.0, nothing)
+# The buffer valve is only reported when it moves, so start from the standard
+# port 1 and mark it as assumed until the first report.
+InstrumentState() = InstrumentState("---", 0.0, 0.0, 0.0, 0.0, IV_UNKNOWN, "", "", 0.0, 0.0, 1, 0.0, nothing,
+    1, false)
 
 """
 Application-wide shared state.  Passed to OPC handlers and the CSV writer.

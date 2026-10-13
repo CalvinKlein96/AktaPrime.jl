@@ -11,6 +11,7 @@ using Preferences
 
 include("types.jl")
 include("csv_writer.jl")   # must come before protocol (push_event! calls write_csv_event)
+include("method.jl")
 include("protocol.jl")
 include("gui.jl")
 
@@ -195,6 +196,7 @@ function _run_live(serial_override::Union{Nothing,AbstractString}=nothing)
     app.log_prefix = _prompt_log_prefix(demo_mode, serial_port)
     csv_filename = newlogname(app)
     app.csv_io = init_csv(csv_filename)
+    demo_mode || (RAW_IO[] = open(replace(csv_filename, r"\.csv$" => "_raw.txt"), "w"))
     app.log_filename = csv_filename
 
     # ── Start link layer or demo runner ────────────────────────────────────────
@@ -225,6 +227,10 @@ function _run_live(serial_override::Union{Nothing,AbstractString}=nothing)
         shutdown[] = true
         close(app.csv_io)
         rm(app.log_filename; force=true)   # discard the empty, unused log
+        if !isnothing(RAW_IO[])
+            close(RAW_IO[])
+            rm(replace(app.log_filename, r"\.csv$" => "_raw.txt"); force=true)
+        end
         return
     end
 
@@ -247,6 +253,7 @@ function _run_live(serial_override::Union{Nothing,AbstractString}=nothing)
     finally
         shutdown[] = true
         close(app.csv_io)
+        isnothing(RAW_IO[]) || close(RAW_IO[])
         try
             wait(link_task)
         catch

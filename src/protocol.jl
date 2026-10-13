@@ -336,6 +336,15 @@ function _set_inject_from_log!(text::String, inst::InstrumentState)::Bool
     return false
 end
 
+# "Buffer Valve Pos 3"; a change made on the front panel is prefixed "Manual Set; ".
+function _set_buffer_valve_from_log!(text::String, inst::InstrumentState)::Bool
+    m = match(r"^(?:Manual Set;\s*)?Buffer Valve Pos\s+([1-8])$"i, strip(text))
+    m === nothing && return false
+    inst.buffer_port = parse(Int, m.captures[1])
+    inst.buffer_port_known = true
+    return true
+end
+
 function _set_fraction_from_log!(text::String, inst::InstrumentState, app::AppState)::Bool
     msg = strip(text)
     changed = false
@@ -377,6 +386,11 @@ function _handle_run_state(data::Vector{UInt8}, app::AppState)
     if _is_run_start(inst.run_state, state_name)
         rolllog!(app)
         inst = app.inst[]
+        # The method dump arrives just before the run starts; record it in the new log.
+        if !isnothing(PENDING_METHOD_EVENT[])
+            push_event!(app, EVT_LOG, PENDING_METHOD_EVENT[])
+            PENDING_METHOD_EVENT[] = nothing
+        end
     end
 
     inst.run_state = state_name
@@ -416,7 +430,8 @@ function _handle_log_message(opc::UInt16, data::Vector{UInt8}, app::AppState)
     text = String(copy(data))
     if opc == OPC_LOG_SINGLE
         inst = app.inst[]
-        changed = _set_inject_from_log!(text, inst) | _set_fraction_from_log!(text, inst, app)
+        changed = _set_inject_from_log!(text, inst) | _set_buffer_valve_from_log!(text, inst) |
+                  _set_fraction_from_log!(text, inst, app)
         changed && notify(app.inst)
         @info "Log: $text"
         push_event!(app, EVT_LOG, text)
@@ -428,7 +443,8 @@ function _handle_log_message(opc::UInt16, data::Vector{UInt8}, app::AppState)
         full = app.log_buf * text
         app.log_buf = ""
         inst = app.inst[]
-        changed = _set_inject_from_log!(full, inst) | _set_fraction_from_log!(full, inst, app)
+        changed = _set_inject_from_log!(full, inst) | _set_buffer_valve_from_log!(full, inst) |
+                  _set_fraction_from_log!(full, inst, app)
         changed && notify(app.inst)
         @info "Log: $full"
         push_event!(app, EVT_LOG, full)
@@ -438,8 +454,48 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # dispatch_rx_opc
 # ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Raw capture — material for decoding undocumented messages
+# ─────────────────────────────────────────────────────────────────────────────
+# Every received OPC except trend data and the watchdog is appended to the raw
+# log, and each method transfer (0x2007 … 0x2008) is saved as the instrument
+# sent it, unescaped, to <log>_method_N.met.
+const RAW_IO = Ref{Union{Nothing,IO}}(nothing)
+const METHOD_BUF = Ref{Union{Nothing,Vector{UInt8}}}(nothing)
+const METHOD_COUNT = Ref(0)
+
+_printable(data) = String(map(b -> 0x20 <= b <= 0x7e ? b : UInt8('.'), data))
+
+function _capture_opc(opc::UInt16, data::Vector{UInt8}, app::AppState)
+    io = RAW_IO[]
+    if !isnothing(io) && opc != OPC_TREND_DATA && opc != OPC_WATCHDOG
+        println(io, Dates.format(now(), "HH:MM:SS.sss"), "  0x", string(opc, base=16, pad=4),
+            "  n=", length(data), "  ", bytes2hex(data), "  |", _printable(data), "|")
+        flush(io)
+    end
+
+    if opc == OPC_METHOD_DATA_A
+        METHOD_BUF[] = UInt8[]
+    elseif opc in (OPC_METHOD_DATA_C, OPC_METHOD_DATA_D, OPC_METHOD_DATA_E, OPC_METHOD_DATA_F)
+        isnothing(METHOD_BUF[]) && (METHOD_BUF[] = UInt8[])   # transfer seen without its 0x2007
+        append!(METHOD_BUF[], data)
+    elseif opc == OPC_METHOD_DATA_B && !isnothing(METHOD_BUF[])
+        METHOD_COUNT[] += 1
+        path = replace(app.log_filename, r"\.csv$" => "_method_$(METHOD_COUNT[]).met")
+        write(path, METHOD_BUF[])
+        @info "Saved method transfer ($(length(METHOD_BUF[])) bytes) to $path"
+        try
+            apply_method_dump!(app, parse_method_dump(METHOD_BUF[]))
+        catch err
+            @warn "Could not decode method dump" exception = err
+        end
+        METHOD_BUF[] = nothing
+    end
+end
+
 function dispatch_rx_opc(opc::UInt16, data::Vector{UInt8},
     tx_queue::Channel, st::LinkState, app::AppState)
+    _capture_opc(opc, data, app)
     if opc == OPC_PROG_NAME
         name = rstrip(String(copy(data[1:min(100, end)])), '\0')
         @info "Programme name: $name"

@@ -8,7 +8,9 @@ const COL_PRES = RGBf(0.75, 0.45, 0.00)
 const COL_PH = RGBf(0.55, 0.25, 0.65)
 const COL_FLOW = RGBf(0.10, 0.45, 0.55)
 
-const COL_BUF_A = RGBf(0.80, 0.10, 0.10)   # red
+const COL_BUF_A = RGBf(0.80, 0.10, 0.10)   # red — buffer valve port 1 (standard buffer A)
+const COL_BUF_PORT = RGBf(0.95, 0.55, 0.25)   # orange — buffer valve ports 2–7
+const COL_SAMPLE = RGBf(0.70, 0.35, 0.80)   # violet — buffer valve port 8 (sample loading)
 const COL_BUF_B = RGBf(0.90, 0.80, 0.05)   # yellow
 
 const FRAC_COLORS = [RGBf(0.8, 0.9, 1.0), RGBf(1.0, 1.0, 0.8)]  # light blue, light yellow
@@ -102,6 +104,42 @@ function _normalise(pts::AbstractVector{<:Point2}, key::Symbol)
     return scaled, (lo, hi)
 end
 
+# Overlay y-range: headroom above 100 % so traces are not squashed against the top.
+const OVERLAY_YLIMS = (-3, 110)
+
+_channel_ylabel(name, unit) = isempty(unit) ? name : "$name ($unit)"
+
+# Overlay y-axis: in % of range by default, or in the real units of the highlighted
+# trace. `getrange()` returns that trace's current (lo, hi), which map to 0–100 %;
+# ticks are chosen on the real values and placed at their scaled positions.
+function _set_overlay_yaxis!(ax, highlight)
+    if isnothing(highlight)
+        ax.yticks = Makie.automatic
+        ax.ytickformat = Makie.automatic
+        ax.ylabel = "Scaled (% of range)"
+        ax.ylabelcolor = :black
+        ax.yticklabelcolor = :black
+        return
+    end
+    name, unit, col, getrange = highlight
+    function toreal(v)
+        lo, hi = getrange()
+        return lo + v / 100 * (hi - lo)
+    end
+    ax.yticks = (vmin, vmax) -> begin
+        lo, hi = getrange()
+        span = hi - lo
+        span > 0 || return [50.0]
+        t = Makie.get_tickvalues(LinearTicks(6), toreal(vmin), toreal(vmax))
+        return (t .- lo) ./ span .* 100
+    end
+    ax.ytickformat = vals -> Makie.get_ticklabels(Makie.automatic, toreal.(vals))
+    ax.ylabel = _channel_ylabel(name, unit)
+    ax.ylabelcolor = col
+    ax.yticklabelcolor = col
+    return
+end
+
 _overlay_label(name, unit, (lo, hi)) =
     "━━  $name   ($(@sprintf("%.3g", lo))–$(@sprintf("%.3g", hi))$(isempty(unit) ? "" : " $unit"))"
 
@@ -145,7 +183,7 @@ function build_gui(app::AppState; viewer::Bool=false)::Figure
         ygridvisible=false, xgridvisible=false)
     # Overlay mode: all traces on one axis, each scaled to 0–100 % of its range.
     ax_ov = Axis(left[7, 1]; ylabel="Scaled (% of range)", ygridvisible=false,
-        xgridvisible=false, limits=(nothing, (-3, 103)))
+        xgridvisible=false, limits=(nothing, OVERLAY_YLIMS))
     plot_axes = (ax_uv, ax_pctb, ax_cond, ax_ph, ax_pres, ax_rate, ax_ov)
 
     linkxaxes!(plot_axes...)
@@ -359,12 +397,15 @@ function build_gui(app::AppState; viewer::Bool=false)::Figure
             v = @sprintf("%.4f", s.run_vol_mL)
             flows = _flow_setpoints(app.events[], TrendPoint[], false)
             flow = isempty(flows) ? "---" : @sprintf("%.2f mL/min", flows[end][2])
+            port = s.buffer_port == 1 ? "1 (A)" : s.buffer_port == 8 ? "8 (sample)" : string(s.buffer_port)
+            port *= s.buffer_port_known ? "" : " — assumed"
             status_text[] = """
 State: $(s.run_state)
 Run time: $t_min min
 Run volume: $v mL
 Flow: $flow
 Valve: $inj
+Buffer valve: $port
 Output: $route
 Fraction #: $(s.fraction_number)
 Fraction volume: $(@sprintf("%.2f", s.fraction_vol_mL)) mL
@@ -380,7 +421,7 @@ File: $(basename(app.log_filename))"""
             xticklabelsvisible=false, yticklabelsvisible=false,
             leftspinevisible=false, rightspinevisible=false,
             topspinevisible=false, bottomspinevisible=false,
-            limits=(0.3, 8.1, 1.3, 12.0))
+            limits=(0.3, 8.1, 1.3, 13.3))
         _draw_flow_schematic!(ax_flow, app)
     end
 
@@ -388,7 +429,8 @@ File: $(basename(app.log_filename))"""
     # zoomed keeps the shared x-range stuck. %B keeps its fixed range, flow starts at 0.
     function rescale!()
         for ax in plot_axes
-            ax.limits[] = ax === ax_pctb || ax === ax_ov ? (nothing, (-3, 103)) :
+            ax.limits[] = ax === ax_pctb ? (nothing, (-3, 103)) :
+                          ax === ax_ov ? (nothing, OVERLAY_YLIMS) :
                           ax === ax_rate ? (nothing, (0, nothing)) : (nothing, nothing)
             reset_limits!(ax)
         end
@@ -429,8 +471,10 @@ File: $(basename(app.log_filename))"""
     highlighted = Observable{Union{Nothing,Symbol}}(nothing)
     ov_plots = Dict{Symbol,Any}()
     ov_labels = Dict{Symbol,Observable{String}}()
+    ov_ranges = Dict{Symbol,Observable}()
     for (key, name, unit, col, pts, _) in ov_channels
         norm = @lift _normalise($pts, key)
+        ov_ranges[key] = @lift $norm[2]
         ov_labels[key] = @lift _overlay_label(name, unit, $norm[2])
         color = @lift isnothing($highlighted) || $highlighted === key ?
                       RGBAf(col.r, col.g, col.b, 1.0) : RGBAf(col.r, col.g, col.b, 0.2)
@@ -439,6 +483,19 @@ File: $(basename(app.log_filename))"""
         ov_plots[key] = key === :flow ?
                         stairs!(ax_ov, npts; step=:post, color=color, linewidth=lw) :
                         lines!(ax_ov, npts; color=color, linewidth=lw)
+    end
+
+    # The overlay y-axis shows the highlighted trace's real values.
+    on(highlighted) do key
+        i = findfirst(c -> c[1] === key, ov_channels)
+        _set_overlay_yaxis!(ax_ov, isnothing(i) ? nothing :
+            let (_, name, unit, col, _, _) = ov_channels[i]
+                (name, unit, col, () -> ov_ranges[key][])
+            end)
+    end
+    # Its range grows with the data, so refresh the ticks when it changes.
+    on(app.trend_data) do _
+        isnothing(highlighted[]) || notify(ax_ov.yticks)
     end
 
     # Legend: one button per visible trace, inside the top-left of the overlay axis.
@@ -650,9 +707,15 @@ function _save_plot_pdf(app::AppState, axes, toggles, by_vol::Bool, counter::Ref
     xlo, xhi = xr.origin[1], xr.origin[1] + xr.widths[1]
     xlab = by_vol ? "Volume (mL)" : "Time (min)"
 
-    expfig = overlay ?
-             _overlay_export_fig(trend, events, fracs, specs, ax_ov, by_vol, xlab, (xlo, xhi), highlighted) :
-             _stacked_export_fig(trend, events, fracs, specs, by_vol, xlab, (xlo, xhi))
+    # Both views on one page: the stacked panels, then the overlay below them.
+    # The overlay keeps its on-screen y-range only when it is the view being shown.
+    yr = ax_ov.finallimits[]
+    ov_ylims = overlay ? (yr.origin[2], yr.origin[2] + yr.widths[2]) : OVERLAY_YLIMS
+    expfig = Figure(size=(1000, 200 * length(specs) + 500), backgroundcolor=:white)
+    _stacked_export!(expfig[1, 1], trend, events, fracs, specs, by_vol, xlab, (xlo, xhi))
+    _overlay_export!(expfig[2, 1], trend, events, fracs, specs, by_vol, xlab, (xlo, xhi),
+        ov_ylims, highlighted)
+    rowsize!(expfig.layout, 2, Relative(500 / (200 * length(specs) + 500)))
 
     counter[] += 1
     prefix = isempty(app.log_prefix) ? "akta" : app.log_prefix
@@ -677,12 +740,12 @@ _export_points(chan::Symbol, trend, events, by_vol::Bool)::Vector{Point2f} =
     [Point2f(_trend_x(p, by_vol), _channel_value(p, chan)) for p in trend]
 
 # Stacked export: one panel per visible channel, each with its on-screen y-limits.
-function _stacked_export_fig(trend, events, fracs, specs, by_vol::Bool, xlab, (xlo, xhi))
-    expfig = Figure(size=(1000, 220 * length(specs)), backgroundcolor=:white)
+function _stacked_export!(pos, trend, events, fracs, specs, by_vol::Bool, xlab, (xlo, xhi))
+    grid = GridLayout(pos)
     exaxes = Axis[]
     for (i, (srcax, chan, ylab, col)) in enumerate(specs)
         bottom = i == length(specs)
-        ax = Axis(expfig[i, 1]; ylabel=ylab, xlabel=(bottom ? xlab : ""),
+        ax = Axis(grid[i, 1]; ylabel=ylab, xlabel=(bottom ? xlab : ""),
             xgridvisible=false, ygridvisible=false, xticklabelsvisible=bottom)
         (chan === :uv || chan === :pctb) &&
             _draw_fraction_spans!(ax, fracs, trend, by_vol; labels=(chan === :pctb))
@@ -704,16 +767,15 @@ function _stacked_export_fig(trend, events, fracs, specs, by_vol::Bool, xlab, (x
     end
     linkxaxes!(exaxes...)
     xlims!(exaxes[1], xlo, xhi)
-    return expfig
+    return
 end
 
 # Overlay export: every visible channel on one axis scaled to 0–100 %, with the
-# on-screen highlight and a legend giving each trace's real range.
-function _overlay_export_fig(trend, events, fracs, specs, ax_ov, by_vol::Bool, xlab,
-    (xlo, xhi), highlighted)
-    expfig = Figure(size=(1000, 500), backgroundcolor=:white)
-    ax = Axis(expfig[1, 1]; ylabel="Scaled (% of range)", xlabel=xlab,
-        xgridvisible=false, ygridvisible=false)
+# on-screen highlight (y-axis in its units) and a legend giving each trace's range.
+function _overlay_export!(pos, trend, events, fracs, specs, by_vol::Bool, xlab,
+    (xlo, xhi), (ylo, yhi), highlighted)
+    ax = Axis(pos; xlabel=xlab, xgridvisible=false, ygridvisible=false)
+    _set_overlay_yaxis!(ax, nothing)
     _draw_fraction_spans!(ax, fracs, trend, by_vol)
     for e in events
         c, style = get(EVT_COLORS, e.kind, (:black, :dash))
@@ -729,14 +791,14 @@ function _overlay_export_fig(trend, events, fracs, specs, ax_ov, by_vol::Bool, x
         color = RGBAf(col.r, col.g, col.b, dim ? 0.2 : 1.0)
         lw = highlighted === chan ? 3.0 : 1.5
         label = replace(_overlay_label(names[chan]..., range), "━━  " => "")
+        highlighted === chan && _set_overlay_yaxis!(ax, (names[chan]..., col, () -> range))
         chan === :flow ?
             stairs!(ax, scaled; step=:post, color=color, linewidth=lw, label=label) :
             lines!(ax, scaled; color=color, linewidth=lw, label=label)
     end
     axislegend(ax; position=:lt, framevisible=true, labelsize=11)
-    yr = ax_ov.finallimits[]
-    limits!(ax, xlo, xhi, yr.origin[2], yr.origin[2] + yr.widths[2])
-    return expfig
+    limits!(ax, xlo, xhi, ylo, yhi)
+    return
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -776,8 +838,20 @@ function _draw_flow_schematic!(ax, app::AppState)
     y_out = 3.6
     y_bottom = 2.4
 
+    # ── Buffer valve: 8 inlet ports in a row above it, feeding the A side ───
+    # The active port is filled and piped to the valve; the valve feeds the mixer
+    # (switch valve), where buffer B is mixed in.
+    n_ports = 8
+    x_vlv = 2.9
+    y_port = 12.45
+    port_x = [x_vlv + 0.62 * (i - (n_ports + 1) / 2) for i in 1:n_ports]
+    port_color(i) = i == 1 ? COL_BUF_A : i == n_ports ? COL_SAMPLE : COL_BUF_PORT
+
+    ln_ports = [lines!(ax, [port_x[i], x_vlv], [y_port - 0.24, y_buf + 0.31];
+        color=port_color(i), linewidth=2.2, visible=false) for i in 1:n_ports]
+
     # Geometry chosen to mirror the requested routing diagrams.
-    ln_buf_a = lines!(ax, [x_l, x_c], [11.0, y_mix + 0.02]; color=COL_BUF_A, linewidth=2.2, visible=false)
+    ln_buf_a = lines!(ax, [x_vlv, x_c], [y_buf - 0.31, y_mix + 0.02]; color=COL_BUF_A, linewidth=2.2, visible=false)
     ln_buf_b = lines!(ax, [x_frac, x_c], [11.0, y_mix + 0.02]; color=COL_BUF_B, linewidth=2.2, visible=false)
     ln_mix_to_valve = lines!(ax, [x_c, x_c], [y_mix - 0.38, y_inj + 0.42]; color=:steelblue, linewidth=2.5, visible=false)
 
@@ -798,7 +872,18 @@ function _draw_flow_schematic!(ax, app::AppState)
     # ── Static symbols ───────────────────────────────────────────────────────
     # The mixer box itself is drawn below as a live %B-coloured poly, so it is
     # deliberately omitted here to avoid a doubled label.
-    box!(ax, x_l, y_buf, 1.30, 0.62, "Buffer A"; color=COL_BUF_A, fontsize=11)
+    port_polys = [poly!(ax, Rect2f(port_x[i] - 0.25, y_port - 0.24, 0.50, 0.48);
+        color=:gray92, strokecolor=:black, strokewidth=1) for i in 1:n_ports]
+    for i in 1:n_ports
+        text!(ax, port_x[i], y_port; text=string(i), fontsize=10,
+            align=(:center, :center), font=:bold)
+    end
+    text!(ax, port_x[1], y_port + 0.30; text="A", fontsize=9, align=(:center, :bottom), color=:gray35)
+    text!(ax, port_x[end], y_port + 0.30; text="Sample", fontsize=9, align=(:center, :bottom), color=:gray35)
+    vlv_poly = poly!(ax, Rect2f(x_vlv - 1.2, y_buf - 0.31, 2.4, 0.62);
+        color=COL_BUF_A, strokecolor=:black, strokewidth=1)
+    vlv_txt = text!(ax, x_vlv, y_buf; text="BUFFER VALVE", fontsize=10,
+        align=(:center, :center), font=:bold)
     box!(ax, x_frac, y_buf, 1.30, 0.62, "Buffer B"; color=COL_BUF_B, fontsize=11)
     inj_poly = diamond!(ax, x_c, y_inj, 1.55, 0.92; color=:lightgray)
     box!(ax, x_c, y_col, 1.35, 0.74, "COLUMN"; color=:wheat, fontsize=11)
@@ -814,10 +899,11 @@ function _draw_flow_schematic!(ax, app::AppState)
     # ── MIXER — colour blends BufA→BufB by %B ────────────────────────────────
     mixer_color = @lift begin
         td = $(app.trend_data)
+        a = port_color($(app.inst).buffer_port)
         f = isempty(td) ? 0.0 : clamp(td[end].pctb / 100.0, 0.0, 1.0)
-        RGBf((1 - f) * COL_BUF_A.r + f * COL_BUF_B.r,
-            (1 - f) * COL_BUF_A.g + f * COL_BUF_B.g,
-            (1 - f) * COL_BUF_A.b + f * COL_BUF_B.b)
+        RGBf((1 - f) * a.r + f * COL_BUF_B.r,
+            (1 - f) * a.g + f * COL_BUF_B.g,
+            (1 - f) * a.b + f * COL_BUF_B.b)
     end
     poly!(ax, Rect2f(x_c - 0.65, y_mix - 0.36, 1.30, 0.72);
         color=mixer_color, strokecolor=:black, strokewidth=1)
@@ -843,6 +929,19 @@ function _draw_flow_schematic!(ax, app::AppState)
 
         has_known_path = !is_unk
         setvisible!(ln_buf_a, has_known_path)
+
+        # Buffer valve: fill and pipe the active port; dimmed while only assumed.
+        port = s.buffer_port
+        pcol = port_color(port)
+        alpha = s.buffer_port_known ? 1.0 : 0.45
+        for i in 1:n_ports
+            port_polys[i].color[] = i == port ? RGBAf(pcol.r, pcol.g, pcol.b, alpha) : RGBAf(0.92, 0.92, 0.92, 1)
+            setvisible!(ln_ports[i], has_known_path && i == port)
+            ln_ports[i].alpha[] = alpha
+        end
+        ln_buf_a.color[] = RGBAf(pcol.r, pcol.g, pcol.b, alpha)
+        vlv_poly.color[] = RGBAf(pcol.r, pcol.g, pcol.b, alpha)
+        vlv_txt.text[] = s.buffer_port_known ? "BUFFER VALVE $port" : "BUFFER VALVE $port?"
         setvisible!(ln_buf_b, has_known_path)
         setvisible!(ln_mix_to_valve, has_known_path)
 

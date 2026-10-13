@@ -1,4 +1,6 @@
 .claude
 *.csv
+*_raw.txt
+*.met
 docs/build
 *figure*.pdf
