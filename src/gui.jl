@@ -143,6 +143,47 @@ end
 _overlay_label(name, unit, (lo, hi)) =
     "━━  $name   ($(@sprintf("%.3g", lo))–$(@sprintf("%.3g", hi))$(isempty(unit) ? "" : " $unit"))"
 
+# Event labels start just right of their event line, in rows from the top of the
+# visible area: a label moves down a row only if it would overlap one already
+# placed. Laid out in screen pixels, so it is redone whenever the view changes.
+const EVENT_LABEL_FONTSIZE = 8
+
+function _event_label_positions(xs::AbstractVector{<:Real}, labels::AbstractVector{<:AbstractString},
+    lims::Rect2, px::AbstractVector{<:Real}, avoid=nothing)::Vector{Point2f}
+    x0, y0 = lims.origin
+    w, h = lims.widths
+    pxw, pxh = max(px[1], 1), max(px[2], 1)
+    gap = 3                                            # px between line and label
+    rowh = EVENT_LABEL_FONTSIZE * 1.3                  # px per row
+    row_end = Float64[]                                # right edge (px) of each row
+    pts = Vector{Point2f}(undef, length(xs))
+    # `avoid` = (left, right, top, bottom) px box, top/bottom measured from the top edge
+    blocked(r, start, stop) = !isnothing(avoid) && start < avoid[2] && stop > avoid[1] &&
+                              2 + r * rowh > avoid[3] && 2 + (r - 1) * rowh < avoid[4]
+    for i in sortperm(xs)
+        start = (xs[i] - x0) / w * pxw + gap
+        stop = start + length(labels[i]) * EVENT_LABEL_FONTSIZE * 0.6 + gap
+        r = 1
+        while (r <= length(row_end) && row_end[r] >= start) || blocked(r, start, stop)
+            r += 1
+        end
+        while length(row_end) < r
+            push!(row_end, -Inf)
+        end
+        row_end[r] = stop
+        pts[i] = Point2f(xs[i] + gap / pxw * w, y0 + h - (2 + (r - 1) * rowh) / pxh * h)
+    end
+    return pts
+end
+
+function _event_labels!(ax, evts, x_mode_is_vol; avoid=Observable(nothing))
+    lbls = @lift [_event_label_top(e) for e in $evts]
+    pts = @lift _event_label_positions([_event_x(e, $x_mode_is_vol) for e in $evts], $lbls,
+        $(ax.finallimits), $(ax.scene.viewport).widths, $avoid)
+    text!(ax, pts; text=lbls, fontsize=EVENT_LABEL_FONTSIZE, color=:gray25,
+        align=(:left, :top), xautolimits=false, yautolimits=false)
+end
+
 function _fraction_label_bottom(e::AktaEvent)::String
     # Show just the fraction number (no "F#" prefix)
     if (m = match(r"Feed Tube Nr\s+(\d+)", e.text)) !== nothing
@@ -323,19 +364,7 @@ function build_gui(app::AppState; viewer::Bool=false)::Figure
         filtered
     end
 
-    uv_text_top_y = @lift begin
-        yvals = [p[2] for p in $uv_pts]
-        ymax = maximum(yvals)
-        span = max(1e-6, ymax - minimum(yvals))
-        ymax - 0.05 * span
-    end
-
-    evt_top_pts = @lift [Point2f(_event_x(e, $x_mode_is_vol), $uv_text_top_y) for e in $evt_other]
-    evt_top_lbl = @lift [_event_label_top(e) for e in $evt_other]
-
-    text!(ax_uv, evt_top_pts;
-        text=evt_top_lbl, fontsize=8, color=:gray25,
-        align=(:center, :top), xautolimits=false, yautolimits=false)
+    _event_labels!(ax_uv, evt_other, x_mode_is_vol)
 
     # ── Event legend ──────────────────────────────────────────────────────────
     # legend_elements = [LineElement(color=EVT_COLORS[k][1], linestyle=EVT_COLORS[k][2])
@@ -503,6 +532,15 @@ File: $(basename(app.log_filename))"""
     legend = GridLayout(left[7, 1]; tellwidth=false, tellheight=false,
         halign=:left, valign=:top, alignmode=Outside(8), default_rowgap=3)
     legend_btns = Pair{Symbol,Button}[]
+
+    # Overlay event labels go around the legend: its box in the axis' pixel space,
+    # as (left, right, top, bottom) with top/bottom measured down from the top edge.
+    legend_box = @lift let bb = $(legend.layoutobservables.computedbbox), vp = $(ax_ov.scene.viewport)
+        bx = bb.origin[1] - vp.origin[1]
+        by = vp.origin[2] + vp.widths[2] - (bb.origin[2] + bb.widths[2])
+        (bx, bx + bb.widths[1], by, by + bb.widths[2])
+    end
+    _event_labels!(ax_ov, evt_other, x_mode_is_vol; avoid=legend_box)
 
     function style_legend!()
         for (key, btn) in legend_btns
