@@ -99,11 +99,12 @@ end
 # Overlay mode: scale a trace to 0–100 % of its own range. %B already is a
 # percentage; flow is scaled from 0 so it reads as a fraction of the top flow.
 # Returns the scaled points and the (lo, hi) range that maps to 0–100 %.
-function _normalise(pts::AbstractVector{<:Point2}, key::Symbol)
+# `range` = (lo, hi) of the whole trace when `pts` is only a downsampled part of it.
+function _normalise(pts::AbstractVector{<:Point2}, key::Symbol; range=nothing)
     key === :pctb && return Vector{Point2f}(pts), (0.0f0, 100.0f0)
     ys = [p[2] for p in pts]
-    lo = key === :flow ? 0.0f0 : Float32(minimum(ys))
-    hi = Float32(maximum(ys))
+    lo, hi = isnothing(range) ? (Float32(minimum(ys)), Float32(maximum(ys))) : Float32.(range)
+    key === :flow && (lo = 0.0f0)
     span = hi - lo
     scaled = span > 0 ? [Point2f(p[1], (p[2] - lo) / span * 100) for p in pts] :
              [Point2f(p[1], 50) for p in pts]
@@ -265,21 +266,29 @@ end
 # affected; only what is drawn is batched.
 const GUI_REFRESH_S = Ref(0.5)
 
-# Copies of `srcs` that pass changes on at most every GUI_REFRESH_S.
-function _throttled(srcs::Observable...)
+# True while the package is being precompiled: background loops must not start then.
+_precompiling() = ccall(:jl_generating_output, Cint, ()) == 1
+
+# Copies of `srcs` that pass changes on at most every GUI_REFRESH_S, and only
+# while `active` (the page is on screen); a page catches up when it is shown.
+function _throttled(srcs::Observable...; active::Observable{Bool}=Observable(true))
     proxies = map(o -> Observable(o[]), srcs)
     dirty = fill(false, length(srcs))
     for (i, o) in enumerate(srcs)
         on(_ -> (dirty[i] = true), o)
     end
-    @async while true
+    function flush!()
+        for i in eachindex(srcs)
+            dirty[i] || continue
+            dirty[i] = false
+            proxies[i][] = srcs[i][]
+        end
+    end
+    on(a -> a && flush!(), active)
+    _precompiling() || @async while true
         sleep(GUI_REFRESH_S[])
         try
-            for i in eachindex(srcs)
-                dirty[i] || continue
-                dirty[i] = false
-                proxies[i][] = srcs[i][]
-            end
+            active[] && flush!()
         catch err
             @error "GUI refresh failed" exception = (err, catch_backtrace())
         end
@@ -287,11 +296,56 @@ function _throttled(srcs::Observable...)
     return proxies
 end
 
+# ── Display downsampling ──────────────────────────────────────────────────────
+# A trace is drawn with at most 2 × DISPLAY_BINS points: the data in the shown
+# x-window is split into DISPLAY_BINS buckets that each keep their minimum and
+# maximum, so peaks look the same as with every point drawn while long runs stay
+# light to draw. Recording and PDF export use the full data.
+const DISPLAY_BINS = 1500
+
+# Index of the first point at or beyond x (x grows along the run).
+function _first_at_or_after(trend::AbstractVector{TrendPoint}, x::Real, by_vol::Bool)::Int
+    lo, hi = 1, length(trend) + 1
+    while lo < hi
+        mid = (lo + hi) ÷ 2
+        _trend_x(trend[mid], by_vol) < x ? (lo = mid + 1) : (hi = mid)
+    end
+    return lo
+end
+
+function _display_points(trend::AbstractVector{TrendPoint}, gety, by_vol::Bool,
+    (xlo, xhi))::Vector{Point2f}
+    pt(i) = Point2f(_trend_x(trend[i], by_vol), gety(trend[i]))
+    n = length(trend)
+    # The window, plus one point either side so lines run to the plot edges.
+    i0 = isinf(xlo) ? 1 : max(1, _first_at_or_after(trend, xlo, by_vol) - 1)
+    i1 = isinf(xhi) ? n : min(n, _first_at_or_after(trend, xhi, by_vol))
+    i1 < i0 && return [pt(clamp(i0, 1, n))]
+    m = i1 - i0 + 1
+    m <= 2 * DISPLAY_BINS && return [pt(i) for i in i0:i1]
+    pts = Point2f[]
+    sizehint!(pts, 2 * DISPLAY_BINS)
+    for b in 0:DISPLAY_BINS-1
+        a = i0 + (m * b) ÷ DISPLAY_BINS
+        z = i0 + (m * (b + 1)) ÷ DISPLAY_BINS - 1
+        imin = imax = a
+        ymin = ymax = gety(trend[a])
+        for i in a+1:z
+            y = gety(trend[i])
+            y < ymin && (ymin = y; imin = i)
+            y > ymax && (ymax = y; imax = i)
+        end
+        push!(pts, pt(min(imin, imax)))
+        imin != imax && push!(pts, pt(max(imin, imax)))
+    end
+    return pts
+end
+
 # ─────────────────────────────────────────────────────────────────────────────
 # build_gui — construct the Figure and wire all Observables
 # ─────────────────────────────────────────────────────────────────────────────
 function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
-    status::Union{Nothing,Observable{String}}=nothing)::Figure
+    status::Union{Nothing,Observable{String}}=nothing, on_screen::Observable{Bool}=Observable(true))::Figure
     fig = Figure(size=(1440, 900))      # colours and fonts from the theme (theme.jl)
     pal = ui()                          # palette; not `p`, which closures below use for points
 
@@ -299,7 +353,7 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
     # log opened for viewing does not change, so it is used directly.
     trend_obs, events_obs, inst_obs, fracs_obs = viewer ?
         (app.trend_data, app.events, app.inst, app.fractions) :
-        _throttled(app.trend_data, app.events, app.inst, app.fractions)
+        _throttled(app.trend_data, app.events, app.inst, app.fractions; active=on_screen)
 
     # Layout, one area per job:
     #   top bar      navigation and global actions (tabs, menu; see workspace.jl)
@@ -349,11 +403,21 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
     _trend = @lift let d = $(trend_obs)
         isempty(d) ? [TrendPoint(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)] : d
     end
-    uv_pts = @lift [Point2f(_trend_x(p, $x_mode_is_vol), p.uv) for p in $_trend]
-    cond_pts = @lift [Point2f(_trend_x(p, $x_mode_is_vol), p.cond_mScm) for p in $_trend]
-    ph_pts = @lift [Point2f(_trend_x(p, $x_mode_is_vol), p.ph) for p in $_trend]
-    pctb_pts = @lift [Point2f(_trend_x(p, $x_mode_is_vol), p.pctb) for p in $_trend]
-    pres_pts = @lift [Point2f(_trend_x(p, $x_mode_is_vol), p.pres_MPa) for p in $_trend]
+    # Which views are on screen (set by refresh_panels!), and the x-window to
+    # draw: everything while following live, else the zoomed range (set below).
+    overlay = Observable(false)
+    panel_shown = Dict(k => Observable(k !== :ov) for k in (:uv, :pctb, :cond, :ph, :pres, :ov))
+    xwin = Observable((-Inf, Inf))
+    # Downsampled trace for a panel; a hidden one gets a single point, not drawn.
+    function trace(gety, key)
+        @lift $(panel_shown[key]) ? _display_points($_trend, gety, $x_mode_is_vol, $xwin) :
+              [Point2f(_trend_x($_trend[1], $x_mode_is_vol), gety($_trend[1]))]
+    end
+    uv_pts = trace(p -> p.uv, :uv)
+    cond_pts = trace(p -> p.cond_mScm, :cond)
+    ph_pts = trace(p -> p.ph, :ph)
+    pctb_pts = trace(p -> p.pctb, :pctb)
+    pres_pts = trace(p -> p.pres_MPa, :pres)
     # Same empty-guard as _trend: a dummy point until the first flow message arrives.
     rate_pts = @lift let pts = _flow_setpoints($(events_obs), $(trend_obs), $x_mode_is_vol)
         isempty(pts) ? [Point2f(0, 0)] : pts
@@ -483,7 +547,6 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
     # ── Plot toolbar: x axis, stacked/overlay, visible panels, follow, export ──
     xmenu = Menu(toolbar[1, 1]; options=["Plot vs time", "Plot vs volume"],
         default="Plot vs time", width=150, fontsize=13)
-    overlay = Observable(false)
     ov_btn = Button(toolbar[1, 2]; label="Overlay", fontsize=13)
     function check!(col, label)
         g = GridLayout(toolbar[1, col]; default_colgap=4)
@@ -513,7 +576,9 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
     shown_header = Observable("")
 
     # ── Right panel: cards for the run, the readings and the flow path ─────────
-    shown_flow = @lift isnothing($shown_point) ? nothing : _flow_at(app.events[], $shown_point)
+    # Typed explicitly: it starts as `nothing` (no flow message yet) and later holds numbers.
+    shown_flow = map!(p -> isnothing(p) ? nothing : _flow_at(app.events[], p),
+        Observable{Union{Nothing,Float64}}(nothing), shown_point)
     fmt(fmtstr, x) = isnothing(x) ? "—" : Printf.format(Printf.Format(fmtstr), x)
 
     # Run: what is shown (live / a past moment / end of log), state and position.
@@ -568,8 +633,11 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
 
     # Full-extent autoscale of every panel. All linked axes must be reset: one left
     # zoomed keeps the shared x-range stuck. %B keeps its fixed range, flow starts at 0.
-    function rescale!()
+    # `all=false` (each refresh while following) resets only the panels on screen;
+    # x is shared, and hidden panels catch up when shown.
+    function rescale!(; all::Bool=true)
         for ax in plot_axes
+            all || ax.leftspinevisible[] || continue     # hidden panels have no spine
             ax.limits[] = ax === ax_pctb ? (nothing, (-3, 103)) :
                           ax === ax_ov ? (nothing, OVERLAY_YLIMS) :
                           ax === ax_rate ? (nothing, (0, nothing)) : (nothing, nothing)
@@ -600,21 +668,27 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
 
     # ── Overlay traces ──────────────────────────────────────────────────────────
     # (key, name, unit, colour, points, visibility toggle — nothing means always shown)
+    # The 5th entry reads a trace's value from a point (the flow comes from events).
     ov_channels = (
-        (:uv, "UV", "AU", pal.uv, uv_pts, nothing),
-        (:pctb, "%B", "%", pal.pctb, pctb_pts, tg_pctb),
-        (:cond, "Cond", "mS/cm", pal.cond, cond_pts, tg_cond),
-        (:ph, "pH", "", pal.ph, ph_pts, tg_ph),
-        (:pres, "Pressure", "MPa", pal.pres, pres_pts, tg_pres),
-        (:flow, "Flow", "mL/min", pal.flow, rate_pts, tg_rate))
+        (:uv, "UV", "AU", pal.uv, p -> p.uv, nothing),
+        (:pctb, "%B", "%", pal.pctb, p -> p.pctb, tg_pctb),
+        (:cond, "Cond", "mS/cm", pal.cond, p -> p.cond_mScm, tg_cond),
+        (:ph, "pH", "", pal.ph, p -> p.ph, tg_ph),
+        (:pres, "Pressure", "MPa", pal.pres, p -> p.pres_MPa, tg_pres),
+        (:flow, "Flow", "mL/min", pal.flow, nothing, tg_rate))
 
     # Clicking a legend entry highlights that trace; clicking it again clears it.
     highlighted = Observable{Union{Nothing,Symbol}}(nothing)
     ov_plots = Dict{Symbol,Any}()
     ov_labels = Dict{Symbol,Observable{String}}()
     ov_ranges = Dict{Symbol,Observable}()
-    for (key, name, unit, col, pts, _) in ov_channels
-        norm = @lift _normalise($pts, key)
+    ov_dummy = (Point2f[Point2f(0, 0)], (0.0f0, 1.0f0))
+    for (key, name, unit, col, gety, _) in ov_channels
+        # Scaled to the whole run's range; computed only while the overlay is shown.
+        norm = isnothing(gety) ? @lift(_normalise($rate_pts, key)) :
+               @lift $(panel_shown[:ov]) ?
+                     _normalise(_display_points($_trend, gety, $x_mode_is_vol, $xwin), key;
+                         range=extrema(gety, $_trend)) : ov_dummy
         ov_ranges[key] = @lift $norm[2]
         ov_labels[key] = @lift _overlay_label(name, unit, $norm[2])
         color = @lift isnothing($highlighted) || $highlighted === key ?
@@ -727,6 +801,10 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
             vis && push!(visible, ax)
         end
         setpanel!(ax_ov, 7, ov)
+        for (k, vis) in ((:uv, !ov), (:pctb, !ov && tg_pctb.checked[]), (:cond, !ov && tg_cond.checked[]),
+            (:ph, !ov && tg_ph.checked[]), (:pres, !ov && tg_pres.checked[]), (:ov, ov))
+            panel_shown[k][] == vis || (panel_shown[k][] = vis)
+        end
         if ov
             for (key, _, _, _, _, tg) in ov_channels
                 ov_plots[key].visible[] = isnothing(tg) || tg.checked[]
@@ -775,8 +853,17 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
     end
 
     on(trend_obs) do _
-        tg_follow.checked[] && rescale!()
+        tg_follow.checked[] && rescale!(all=false)
     end
+
+    # Downsampling window: the whole run while following, the zoomed range otherwise.
+    function update_xwin!()
+        l = ax_uv.finallimits[]
+        w = tg_follow.checked[] ? (-Inf, Inf) : (Float64(l.origin[1]), Float64(l.origin[1] + l.widths[1]))
+        w == xwin[] || (xwin[] = w)
+    end
+    on(_ -> update_xwin!(), ax_uv.finallimits)
+    on(_ -> update_xwin!(), tg_follow.checked)
 
     # ── Status bar: connection · recording · mouse help ────────────────────────
     Box(fig[r+2, 1]; color=pal.panel, strokecolor=pal.border, cornerradius=6)
@@ -811,7 +898,7 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
     Label(statusbar[1, col+=1], "Drag: zoom · Right-drag: pan · Ctrl-click: reset · Alt/Shift-click: inspect moment";
         halign=:right, fontsize=FS_SMALL, color=pal.muted, tellwidth=false)
     colgap!(statusbar, 10)
-    viewer || @async while true      # one flag flip every 0.6 s; ends with the program
+    viewer || _precompiling() || @async while true   # a flag flip every 0.6 s; ends with the program
         sleep(0.6)
         is_rec[] && (blink[] = !blink[])
     end

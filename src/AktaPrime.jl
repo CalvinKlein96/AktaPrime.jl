@@ -184,12 +184,13 @@ function _run_live(serial_override::Union{Nothing,AbstractString}=nothing)
     # activate!: ensure the interactive backend (not CairoMakie, used for PDF export)
     GLMakie.activate!(; title="AktaPrime")
     ws = Workspace(acq)
-    live = add_page!(topbar -> build_gui(app; topbar, status=acq.status), ws, "Live";
-        closable=false)
-    ws.active = live
-    ws.tabs_changed[] += 1
+    live = add_page!((topbar, on_screen) -> build_gui(app; topbar, on_screen, status=acq.status),
+        ws, "Live"; closable=false)
+    show_page!(ws, live)
     ws.screen = display(live.fig)
     @info "GUI opened"
+    # Build the Settings page in the background, so its first opening is quick.
+    @async (sleep(2); _later(() -> prepare_settings!(ws), ws))
 
     # ── Run until the window is closed or Ctrl-C ──────────────────────────────
     Base.exit_on_sigint(false)
@@ -277,5 +278,7 @@ end
 function (@main)(args)
     main(collect(args))
 end
+
+include("precompile.jl")
 
 end # module

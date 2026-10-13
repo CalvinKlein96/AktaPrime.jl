@@ -7,7 +7,8 @@ mutable struct Page
     title::String
     fig::Figure
     closable::Bool
-    listeners::Vector{Any}   # its top bar's subscriptions, released when it closes
+    listeners::Vector{Any}       # its top bar's subscriptions, released when it closes
+    on_screen::Observable{Bool}  # live pages pause their refresh while not shown
 end
 
 mutable struct Workspace
@@ -17,8 +18,10 @@ mutable struct Workspace
     active::Union{Nothing,Page}
     tabs_changed::Observable{Int}
     notice::Observable{String}   # last error of a menu action, shown in the top bar
+    settings_page::Union{Nothing,Page}   # built once (ahead of time) and reused
 end
-Workspace(acq::Acquisition) = Workspace(acq, nothing, Page[], nothing, Observable(0), Observable(""))
+Workspace(acq::Acquisition) =
+    Workspace(acq, nothing, Page[], nothing, Observable(0), Observable(""), nothing)
 
 # Runs `f` after the current GUI callback returns: a tab button must not delete
 # itself, or replace the figure it belongs to, from inside its own click handler.
@@ -86,15 +89,26 @@ function _topbar(ws::Workspace, listeners::Vector{Any})
     end
 end
 
-function add_page!(build, ws::Workspace, title::String; closable::Bool=true)::Page
+# `build(topbar, on_screen)` returns the page's Figure. With `tab=false` the page
+# is built but only gets a tab when first shown (used to prepare Settings).
+function _new_page(build, ws::Workspace, title::String, closable::Bool)::Page
     listeners = Any[]
-    page = Page(title, build(_topbar(ws, listeners)), closable, listeners)
+    on_screen = Observable(false)
+    return Page(title, build(_topbar(ws, listeners), on_screen), closable, listeners, on_screen)
+end
+
+function add_page!(build, ws::Workspace, title::String; closable::Bool=true)::Page
+    page = _new_page(build, ws, title, closable)
     push!(ws.pages, page)
     return page
 end
 
 function show_page!(ws::Workspace, page::Page)
+    page in ws.pages || push!(ws.pages, page)
     ws.active = page
+    for p in ws.pages
+        p.on_screen[] == (p === page) || (p.on_screen[] = p === page)
+    end
     ws.tabs_changed[] += 1
     isnothing(ws.screen) || display(ws.screen, page.fig)
 end
@@ -102,7 +116,8 @@ end
 function close_page!(ws::Workspace, page::Page)
     page.closable || return
     filter!(p -> p !== page, ws.pages)
-    foreach(off, page.listeners)
+    page.on_screen[] = false
+    page === ws.settings_page || foreach(off, page.listeners)   # Settings is kept for reuse
     ws.active === page ? show_page!(ws, first(ws.pages)) : (ws.tabs_changed[] += 1)
 end
 
@@ -123,8 +138,8 @@ function open_run!(ws::Workspace)
     app.log_dir = dirname(path)        # plots exported from this tab go next to the CSV,
     app.log_prefix = replace(basename(path), r"\.csv$"i => "")   # named after the run
     @info "Opened $path"
-    show_page!(ws, add_page!(topbar -> build_gui(app; viewer=true, topbar, status=ws.acq.status),
-        ws, title))
+    show_page!(ws, add_page!((topbar, on_screen) ->
+            build_gui(app; viewer=true, topbar, on_screen, status=ws.acq.status), ws, title))
 end
 
 # ── Settings ─────────────────────────────────────────────────────────────────
@@ -134,11 +149,14 @@ _refresh_label(hz) = REFRESH_OPTIONS[something(findfirst(==(hz), REFRESH_HZ), 2)
 
 const VOLUME_UNIT_OPTIONS = ["1 µL per count (ÄKTAprime)", "10 µL per count (ÄKTAprime plus)"]
 
-function open_settings!(ws::Workspace)
-    existing = findfirst(p -> p.title == "Settings", ws.pages)
-    isnothing(existing) || return show_page!(ws, ws.pages[existing])
-    show_page!(ws, add_page!(topbar -> _settings_figure(ws, topbar), ws, "Settings"))
+# Builds the Settings page without showing it, so the first click is quick.
+function prepare_settings!(ws::Workspace)
+    isnothing(ws.settings_page) &&
+        (ws.settings_page = _new_page((topbar, _) -> _settings_figure(ws, topbar), ws, "Settings", true))
+    return ws.settings_page
 end
+
+open_settings!(ws::Workspace) = show_page!(ws, prepare_settings!(ws))
 
 function _settings_figure(ws::Workspace, topbar)::Figure
     acq, s = ws.acq, ws.acq.settings
