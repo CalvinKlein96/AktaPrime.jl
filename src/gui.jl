@@ -39,7 +39,7 @@ function _event_label_top(e::AktaEvent)::String
         return "INJECT"
     elseif e.kind == EVT_RUN_STATE
         if (m = match(r"Run state:\s*([^\s]+)", e.text)) !== nothing
-            return "STATE $(uppercase(m.captures[1]))"
+            return uppercase(m.captures[1])
         end
         return "STATE"
     elseif e.kind == EVT_STEP
@@ -52,7 +52,16 @@ function _event_label_top(e::AktaEvent)::String
                 return val > 0.0 ? "FRAC START" : "FRAC STOP"
             end
         end
-        return length(e.text) > 18 ? "LOG $(e.text[1:15])..." : "LOG $(e.text)"
+        t = strip(e.text)
+        for (re, short) in ((r"^(?:Manual Set;\s*)?Buffer Valve Pos\s+(\d+)"i, "Buffer "),
+            (r"^Injection Valve (\w+)"i, "Inj valve "), (r"^Flow ([0-9.]+) ml/min"i, "Flow "),
+            (r"^(?:Manual Set;\s*)?Concentration ([0-9.]+) %B"i, "%B "),
+            (r"^Feed Tube Nr\s+(\d+)"i, "Tube "))
+            m = match(re, t)
+            isnothing(m) || return short * m.captures[1]
+        end
+        startswith(t, "Method start") && return "Method start"
+        return length(t) > 20 ? first(t, 18) * "…" : t
     elseif e.kind == EVT_CONNECT
         return "CONNECT"
     elseif e.kind == EVT_DISCONNECT
@@ -268,22 +277,23 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # build_gui — construct the Figure and wire all Observables
 # ─────────────────────────────────────────────────────────────────────────────
-function build_gui(app::AppState; viewer::Bool=false, topbar=nothing)::Figure
+function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
+    status::Union{Nothing,Observable{String}}=nothing)::Figure
     fig = Figure(size=(1440, 900), backgroundcolor=:white)
 
-    # Optional top bar (menu and tabs, see workspace.jl) above everything else.
-    body = isnothing(topbar) ? fig.layout : (fig[2, 1] = GridLayout())
+    # Layout, one area per job:
+    #   top bar      navigation and global actions (tabs, menu; see workspace.jl)
+    #   toolbar      how the data is viewed            │ right panel: what the
+    #   plots, slider                                   │ instrument is doing
+    #   status bar   connection, recording, mouse help
+    r = isnothing(topbar) ? 0 : 1          # rows below the (optional) top bar
     isnothing(topbar) || topbar(fig[1, 1])
-
-    # Two independent sub-layouts: plots left, status+flow right.
-    # Nesting gives each side its own row-size control.
-    left = body[1, 1] = GridLayout()
-    right = body[1, 2] = GridLayout(; valign=:top)
+    body = fig[r+1, 1] = GridLayout()
+    toolbar = body[1, 1] = GridLayout(; halign=:left, tellwidth=false)
+    left = body[2, 1] = GridLayout()
+    right = body[1:2, 2] = GridLayout(; valign=:top)
     colsize!(body, 1, Relative(0.75))
     colsize!(body, 2, Relative(0.25))
-    # Force the single row to fill the height. Without this, in viewer mode the
-    # row could shrink to the right column's content and squash the plots.
-    rowsize!(body, 1, Relative(1))
 
     x_mode_is_vol = Observable(false)
 
@@ -450,41 +460,28 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing)::Figure
     #     orientation=:horizontal, framevisible=false, tellwidth=false,
     #     labelsize=11, patchsize=(18, 2))
 
-    # ── Right panel: title, controls, toggles, status, (flow schematic) ────────
-    Label(right[1, 1], "AktaPrime.jl (v0.1.0)";
-        halign=:center, fontsize=17, font=:bold, tellwidth=false)
-
-    # Controls: plotting-mode menu, overlay/stacked switch, save-plot button
-    controls = right[2, 1] = GridLayout(; tellwidth=false)
-    xmenu = Menu(controls[1, 1];
-        options=["Plot vs time", "Plot vs volume"],
-        default="Plot vs time", tellwidth=false, fontsize=13)
+    # ── Plot toolbar: x axis, stacked/overlay, visible panels, follow, export ──
+    xmenu = Menu(toolbar[1, 1]; options=["Plot vs time", "Plot vs volume"],
+        default="Plot vs time", width=150, fontsize=13)
     overlay = Observable(false)
-    ov_btn = Button(controls[1, 2]; label="Overlay", fontsize=13)
-    save_btn = Button(controls[1, 3]; label="Save plot…", fontsize=13)
-    colgap!(controls, 8)
-
-    # ── Chart-visibility toggles ───────────────────────────────────────────
-    toggle_grid = right[3, 1] = GridLayout(; tellwidth=false, halign=:center)
-    Label(toggle_grid[1, 1], "%B"; halign=:right, fontsize=13)
-    tg_pctb = Toggle(toggle_grid[1, 2], active=true)
-    Label(toggle_grid[1, 3], "Cond"; halign=:right, fontsize=13)
-    tg_cond = Toggle(toggle_grid[1, 4], active=true)
-    Label(toggle_grid[2, 1], "pH"; halign=:right, fontsize=13)
-    tg_ph = Toggle(toggle_grid[2, 2], active=true)
-    Label(toggle_grid[2, 3], "Pressure"; halign=:right, fontsize=13)
-    tg_pres = Toggle(toggle_grid[2, 4], active=true)
-    Label(toggle_grid[3, 1], "Flow"; halign=:right, fontsize=13)
-    tg_rate = Toggle(toggle_grid[3, 2], active=true)
+    ov_btn = Button(toolbar[1, 2]; label="Overlay", fontsize=13)
+    function check!(col, label)
+        g = GridLayout(toolbar[1, col]; default_colgap=4)
+        cb = Checkbox(g[1, 1]; checked=true)
+        Label(g[1, 2], label; fontsize=13)
+        return cb
+    end
+    # UV is always shown; these switch the other panels.
+    tg_pctb = check!(3, "%B")
+    tg_cond = check!(4, "Cond")
+    tg_ph = check!(5, "pH")
+    tg_pres = check!(6, "Pressure")
+    tg_rate = check!(7, "Flow")
     # Follow live: auto-rescale to all data on each update. Switched off as soon
     # as the user zooms or pans, so a zoomed view stays put while the run continues.
-    Label(toggle_grid[3, 3], "Follow live"; halign=:right, fontsize=13)
-    tg_follow = Toggle(toggle_grid[3, 4], active=true)
-    colgap!(toggle_grid, 6)
-
-    # Zoom hint above the status read-out
-    Label(right[4, 1], "Drag to zoom · Right-drag to pan · Ctrl-click to reset & follow\nAlt- or Shift-click to inspect a moment";
-        halign=:center, valign=:center, tellwidth=false, fontsize=11, color=:gray40)
+    tg_follow = check!(8, "Follow live")
+    save_btn = Button(toolbar[1, 9]; label="Save plot…", fontsize=13)
+    colgap!(toolbar, 14)
 
     # ── Shown moment: live, or a past moment picked with the time slider ──────
     # The status text and schematic show `shown_state` / `shown_point`: the live
@@ -499,11 +496,11 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing)::Figure
     status_text = @lift _status_text($shown_state, $shown_point,
         isnothing($shown_point) ? nothing : _flow_at(app.events[], $shown_point),
         $shown_header, basename(app.log_filename))
-    Label(right[5, 1], status_text;
+    Label(right[1, 1], status_text;
         halign=:left, justification=:left, tellwidth=false, fontsize=13)
 
     # ── Flow path schematic ─────────────────────────────────────────────────────
-    ax_flow = Axis(right[6, 1];
+    ax_flow = Axis(right[2, 1];
         xgridvisible=false, ygridvisible=false,
         xticksvisible=false, yticksvisible=false,
         xticklabelsvisible=false, yticklabelsvisible=false,
@@ -533,7 +530,7 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing)::Figure
         for ax in plot_axes
             ax.xlabel = lbl
         end
-        tg_follow.active[] = true   # notifies, so this also rescales
+        tg_follow.checked[] = true   # notifies, so this also rescales
     end
 
     # Save the currently displayed plot (visible panels, current limits) to PDF.
@@ -614,7 +611,7 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing)::Figure
         trim!(legend)
         overlay[] || return
         for (key, _, _, col, _, tg) in ov_channels
-            (isnothing(tg) || tg.active[]) || continue
+            (isnothing(tg) || tg.checked[]) || continue
             btn = Button(legend[length(legend_btns)+1, 1]; label=ov_labels[key],
                 fontsize=12, labelcolor=col, labelcolor_hover=col, labelcolor_active=col,
                 buttoncolor_hover=RGBf(0.95, 0.95, 0.95), buttoncolor_active=RGBf(0.85, 0.88, 0.95),
@@ -670,14 +667,14 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing)::Figure
         setpanel!(ax_uv, 1, !ov)
         ov || push!(visible, ax_uv)
         for (ax, row, tg) in panels
-            vis = !ov && tg.active[]
+            vis = !ov && tg.checked[]
             setpanel!(ax, row, vis)
             vis && push!(visible, ax)
         end
         setpanel!(ax_ov, 7, ov)
         if ov
             for (key, _, _, _, _, tg) in ov_channels
-                ov_plots[key].visible[] = isnothing(tg) || tg.active[]
+                ov_plots[key].visible[] = isnothing(tg) || tg.checked[]
             end
             push!(visible, ax_ov)
         end
@@ -685,7 +682,7 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing)::Figure
         bottom.xticklabelsvisible = true
         bottom.xlabelvisible = true
         # Collapsed rows keep their gaps, so only keep a gap between two shown panels.
-        shown = [!ov; [!ov && tg.active[] for (_, _, tg) in panels]; ov]
+        shown = [!ov; [!ov && tg.checked[] for (_, _, tg) in panels]; ov]
         for i in 1:6
             rowgap!(left, i, shown[i] && any(shown[i+1:end]) ? gap0 : Fixed(0))
         end
@@ -693,13 +690,13 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing)::Figure
     end
 
     for (_, _, tg) in panels
-        on(_ -> refresh_panels!(), tg.active)
+        on(_ -> refresh_panels!(), tg.checked)
     end
     on(ov_btn.clicks) do _
         overlay[] = !overlay[]
         ov_btn.label = overlay[] ? "Stacked" : "Overlay"
         refresh_panels!()
-        tg_follow.active[] && rescale!()
+        tg_follow.checked[] && rescale!()
     end
     refresh_panels!()
 
@@ -709,22 +706,46 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing)::Figure
             if event isa ScrollEvent ||
                (event isa MouseEvent &&
                 event.type in (MouseEventTypes.leftdragstop, MouseEventTypes.rightdragstop))
-                tg_follow.active[] = false
+                tg_follow.checked[] = false
             elseif event isa MouseEvent && event.type == MouseEventTypes.leftclick &&
                    ispressed(fig, Keyboard.left_control | Keyboard.right_control)
-                tg_follow.active[] = true
+                tg_follow.checked[] = true
             end
             return Consume(false)
         end
     end
 
-    on(tg_follow.active) do follow
+    on(tg_follow.checked) do follow
         follow && rescale!()
     end
 
     on(app.trend_data) do _
-        tg_follow.active[] && rescale!()
+        tg_follow.checked[] && rescale!()
     end
+
+    # ── Status bar: connection · recording · mouse help ────────────────────────
+    Box(fig[r+2, 1]; color=RGBf(0.95, 0.95, 0.95), strokevisible=false)
+    statusbar = GridLayout(fig[r+2, 1]; alignmode=Outside(6), tellwidth=false)
+    conn = isnothing(status) ? Observable(viewer ? "" : "Live") : status
+    Label(statusbar[1, 1], conn; halign=:left, fontsize=12, color=:gray25)
+    recording = @lift begin
+        td = $(app.trend_data)
+        $(app.events)
+        file = basename(app.log_filename)
+        if viewer
+            "Viewing $file · $(length(td)) points"
+        elseif isnothing(app.csv_io)
+            "Not recording"
+        else
+            t = isempty(td) ? 0.0 : td[end].cum_time_ms / 60_000
+            "● REC  $file · $(@sprintf("%.1f", t)) min"
+        end
+    end
+    Label(statusbar[1, 2], recording; halign=:left, fontsize=12,
+        color=@lift(startswith($recording, "●") ? :firebrick : :gray25))
+    Label(statusbar[1, 3], "Drag: zoom · Right-drag: pan · Ctrl-click: reset · Alt/Shift-click: inspect moment";
+        halign=:right, fontsize=11, color=:gray45, tellwidth=false)
+    colgap!(statusbar, 24)
 
     # ── Time slider: inspect a past moment ─────────────────────────────────────
     # Selects a trend point; at the right end it follows the newest data. The
@@ -862,11 +883,11 @@ function _save_plot_pdf(app::AppState, axes, toggles, by_vol::Bool, counter::Ref
 
     # Visible panels top-to-bottom (UV always); keep the source axis for its y-limits.
     specs = Tuple{Axis,Symbol,String,RGBf}[(ax_uv, :uv, "UV (AU)", COL_UV)]
-    tg_pctb.active[] && push!(specs, (ax_pctb, :pctb, "%B", COL_PCTB))
-    tg_cond.active[] && push!(specs, (ax_cond, :cond, "Conductivity (mS/cm)", COL_COND))
-    tg_ph.active[] && push!(specs, (ax_ph, :ph, "pH", COL_PH))
-    tg_pres.active[] && push!(specs, (ax_pres, :pres, "Pressure (MPa)", COL_PRES))
-    tg_rate.active[] && push!(specs, (ax_rate, :flow, "Flow (mL/min)", COL_FLOW))
+    tg_pctb.checked[] && push!(specs, (ax_pctb, :pctb, "%B", COL_PCTB))
+    tg_cond.checked[] && push!(specs, (ax_cond, :cond, "Conductivity (mS/cm)", COL_COND))
+    tg_ph.checked[] && push!(specs, (ax_ph, :ph, "pH", COL_PH))
+    tg_pres.checked[] && push!(specs, (ax_pres, :pres, "Pressure (MPa)", COL_PRES))
+    tg_rate.checked[] && push!(specs, (ax_rate, :flow, "Flow (mL/min)", COL_FLOW))
 
     xr = ax_uv.finallimits[]
     xlo, xhi = xr.origin[1], xr.origin[1] + xr.widths[1]
@@ -885,7 +906,7 @@ function _save_plot_pdf(app::AppState, axes, toggles, by_vol::Bool, counter::Ref
     counter[] += 1
     prefix = isempty(app.log_prefix) ? "akta" : app.log_prefix
     stamp = Dates.format(Dates.now(), "yyyymmdd_HHMMSS")
-    path = "$(prefix)_$(stamp)_figure_$(counter[]).pdf"
+    path = joinpath(app.log_dir, "$(prefix)_$(stamp)_figure_$(counter[]).pdf")
 
     CairoMakie.activate!()
     try

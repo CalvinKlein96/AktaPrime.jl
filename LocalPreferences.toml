@@ -1,5 +1,6 @@
 [AktaPrime]
+data_dir = "/home/calvin/Desktop/Akta_logs"
 demo_mode = false
-log_prefix = "t"
+log_prefix = "calvin"
 serial_port = "/dev/ttyUSB0"
 volume_unit_uL = 1.0

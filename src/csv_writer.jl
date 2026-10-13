@@ -13,10 +13,10 @@ function init_csv(filename::String)::IO
     return io
 end
 
-"""Timestamped log-file name for the app's current prefix: `<prefix>_<stamp>.csv`."""
+"""Timestamped log-file path for the app's prefix and folder: `<dir>/<prefix>_<stamp>.csv`."""
 function newlogname(app::AppState)::String
     prefix = isempty(app.log_prefix) ? "akta" : app.log_prefix
-    "$(prefix)_$(Dates.format(Dates.now(), "yyyymmdd_HHMMSS")).csv"
+    joinpath(app.log_dir, "$(prefix)_$(Dates.format(Dates.now(), "yyyymmdd_HHMMSS")).csv")
 end
 
 """

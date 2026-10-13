@@ -170,6 +170,9 @@ function _run_live(serial_override::Union{Nothing,AbstractString}=nothing)
         save_settings(settings)
     end
     _print_banner(settings)
+    # Ask for the prefix before anything is recorded; the last one is the default.
+    settings.log_prefix = _prompt_log_prefix(settings.log_prefix)
+    save_settings(settings)
 
     app = AppState()
     acq = start!(Acquisition(app, settings))
@@ -177,7 +180,8 @@ function _run_live(serial_override::Union{Nothing,AbstractString}=nothing)
     # activate!: ensure the interactive backend (not CairoMakie, used for PDF export)
     GLMakie.activate!(; title="AktaPrime")
     ws = Workspace(acq)
-    live = add_page!(topbar -> build_gui(app; topbar), ws, "Live"; closable=false)
+    live = add_page!(topbar -> build_gui(app; topbar, status=acq.status), ws, "Live";
+        closable=false)
     ws.active = live
     ws.tabs_changed[] += 1
     ws.screen = display(live.fig)
@@ -208,10 +212,23 @@ function _print_banner(s::Settings)
     println()
     println(s.demo_mode ? "  DEMO MODE — simulated data (switch off under Settings)." :
                           "  Serial port: $(s.serial_port) (change under Settings).")
-    println("  Log files: $(pwd())/$(s.log_prefix)_<date>_<time>.csv")
-    println("  A new file is started for every run; logs without data are discarded.")
+    println()
+    println("  Data are saved as CSV files in the data folder (change in Settings):")
+    println("      $(data_dir(s))")
+    println("  named <prefix>_<date>_<time>.csv. A new file is started for every")
+    println("  run; logs without any data are discarded.")
+    println()
+    println("  The prefix is a label to help you find these files later, such as")
+    println("  a sample name or your initials. It can also be changed in Settings.")
     println(bar)
     println()
+end
+
+function _prompt_log_prefix(default_prefix::AbstractString)::String
+    print("  Log-file prefix  (press ENTER for \"$default_prefix\"): ")
+    input = eof(stdin) ? "" : strip(readline())
+    println()
+    return isempty(input) ? String(default_prefix) : String(input)
 end
 
 function _report_output(app::AppState)
@@ -221,7 +238,7 @@ function _report_output(app::AppState)
     @info "Logging stopped — $(length(app.trend_data[])) trend points in the final run"
     println()
     println("  Data saved in:")
-    println("      $(pwd())")
+    println("      $(isempty(app.log_dir) ? pwd() : app.log_dir)")
     println()
     println("  Files this session are named:")
     println("      $(app.log_prefix)_<date>_<time>.csv")

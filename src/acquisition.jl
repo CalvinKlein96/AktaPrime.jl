@@ -44,6 +44,7 @@ function start!(acq::Acquisition)
     app, s = acq.app, acq.settings
     VOLUME_UNIT_UL[] = s.volume_unit_uL
     app.log_prefix = s.log_prefix
+    app.log_dir = data_dir(s)
     app.inst[] = InstrumentState()          # nothing is known about the new source yet
     resetrun!(app)
     app.log_filename = _unique_logname(app)

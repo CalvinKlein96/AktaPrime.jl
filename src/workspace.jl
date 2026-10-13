@@ -30,8 +30,7 @@ function _topbar(ws::Workspace, listeners::Vector{Any})
     return function (pos)
         bar = GridLayout(pos; tellwidth=false)
         tabs = GridLayout(bar[1, 1]; halign=:left, default_colgap=2)
-        Label(bar[1, 2], ws.acq.status; halign=:right, fontsize=13, color=:gray25,
-            tellwidth=false)
+        Box(bar[1, 2]; visible=false)   # spacer: menu buttons to the right edge
         open_btn = Button(bar[1, 3]; label="Open run…", fontsize=13)
         set_btn = Button(bar[1, 4]; label="Settings", fontsize=13)
         colgap!(bar, 10)
@@ -88,7 +87,7 @@ end
 # ── Open run… ────────────────────────────────────────────────────────────────
 function open_run!(ws::Workspace)
     path = try
-        NativeFileDialog.pick_file(pwd(); filterlist="csv")
+        NativeFileDialog.pick_file(data_dir(ws.acq.settings); filterlist="csv")
     catch err
         @error "Could not open the file dialog" exception = err
         ""
@@ -106,8 +105,10 @@ function open_run!(ws::Workspace)
         return
     end
     app.log_filename = path
+    app.log_dir = dirname(path)        # plots exported from this tab go next to the CSV
     @info "Opened $path"
-    show_page!(ws, add_page!(topbar -> build_gui(app; viewer=true, topbar), ws, title))
+    show_page!(ws, add_page!(topbar -> build_gui(app; viewer=true, topbar, status=ws.acq.status),
+        ws, title))
 end
 
 # ── Settings ─────────────────────────────────────────────────────────────────
@@ -150,9 +151,11 @@ function _settings_figure(ws::Workspace, topbar)::Figure
     note(5, "Press Enter to apply. Used for the next log file: <prefix>_<date>_<time>.csv")
 
     lbl(6, "Data folder")
-    Label(g[6, 2:3], pwd(); halign=:left, fontsize=14)
+    choose = Button(g[6, 2]; label="Choose…", fontsize=13, halign=:left)
+    folder = Label(g[6, 3], data_dir(s); halign=:left, fontsize=14)
+    note(7, "Log files, method dumps and exported plots are saved here, from the next log file on.")
 
-    feedback = Label(g[7, 1:3], ""; halign=:left, fontsize=13, color=:darkgreen)
+    feedback = Label(g[8, 1:3], ""; halign=:left, fontsize=13, color=:darkgreen)
     rowgap!(g, 14)
     colgap!(g, 16)
 
@@ -180,6 +183,21 @@ function _settings_figure(ws::Workspace, topbar)::Figure
         s.volume_unit_uL == unit_uL && return
         s.volume_unit_uL = VOLUME_UNIT_UL[] = unit_uL
         changed!("Volume unit set to $(Int(unit_uL)) µL per count.")
+    end
+    on(choose.clicks) do _
+        _later() do
+            dir = try
+                NativeFileDialog.pick_folder(data_dir(s))
+            catch err
+                @error "Could not open the folder dialog" exception = err
+                ""
+            end
+            (isempty(dir) || dir == s.data_dir) && return
+            s.data_dir = dir
+            acq.app.log_dir = data_dir(s)
+            folder.text = acq.app.log_dir
+            changed!("Data folder set to $(acq.app.log_dir); the next log file goes there.")
+        end
     end
     on(prefix.stored_string) do str
         str = strip(something(str, ""))

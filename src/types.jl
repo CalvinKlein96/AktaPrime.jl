@@ -93,6 +93,9 @@ mutable struct AppState
 
     # base name for rolled-over log files ("<prefix>_<timestamp>.csv" per run)
     log_prefix::String
+
+    # folder for log files and exported plots ("" = current folder)
+    log_dir::String
 end
 
 AppState() = AppState(
@@ -105,6 +108,7 @@ AppState() = AppState(
     nothing,
     "",
     "akta",
+    "",
 )
 
 # ── helpers ──────────────────────────────────────────────────────────────────
