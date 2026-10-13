@@ -15,6 +15,7 @@ include("csv_writer.jl")   # must come before protocol (push_event! calls write_
 include("method.jl")
 include("protocol.jl")
 include("settings.jl")
+include("theme.jl")
 include("gui.jl")
 include("acquisition.jl")
 include("workspace.jl")
@@ -30,6 +31,7 @@ function _run_replay(filename::AbstractString)
     isfile(filename_str) || (@error "File not found: $filename_str"; return)
     @info "Replay mode - loading \"$filename_str\""
 
+    apply_theme!(load_settings().dark_mode)
     app = AppState()
     load_csv_log!(app, filename_str)
     app.log_filename = filename_str
@@ -169,6 +171,8 @@ function _run_live(serial_override::Union{Nothing,AbstractString}=nothing)
         settings.serial_port = String(serial_override)
         save_settings(settings)
     end
+    apply_theme!(settings.dark_mode)
+    GUI_REFRESH_S[] = 1 / settings.refresh_hz
     _print_banner(settings)
     # Ask for the prefix before anything is recorded; the last one is the default.
     settings.log_prefix = _prompt_log_prefix(settings.log_prefix)

@@ -2,8 +2,6 @@
 # runs, settings) and menu buttons, above the page of the active tab. Every page
 # is its own Figure; switching tabs displays that Figure in the same window.
 
-const COL_TAB = RGBf(0.93, 0.93, 0.93)
-const COL_TAB_ACTIVE = RGBf(0.78, 0.86, 0.97)
 
 mutable struct Page
     title::String
@@ -18,49 +16,73 @@ mutable struct Workspace
     pages::Vector{Page}
     active::Union{Nothing,Page}
     tabs_changed::Observable{Int}
+    notice::Observable{String}   # last error of a menu action, shown in the top bar
 end
-Workspace(acq::Acquisition) = Workspace(acq, nothing, Page[], nothing, Observable(0))
+Workspace(acq::Acquisition) = Workspace(acq, nothing, Page[], nothing, Observable(0), Observable(""))
 
 # Runs `f` after the current GUI callback returns: a tab button must not delete
 # itself, or replace the figure it belongs to, from inside its own click handler.
-_later(f) = @async (yield(); f())
+# Errors in such a background task would vanish silently, so they are logged and,
+# when `ws` is given, shown in the top bar.
+_later(f, ws=nothing) = @async begin
+    yield()
+    try
+        f()
+    catch err
+        @error "GUI action failed" exception = (err, catch_backtrace())
+        isnothing(ws) || (ws.notice[] = "Error: " * first(sprint(showerror, err), 120))
+    end
+end
 
 # Builds the top bar into `pos`; every page has its own copy, kept in sync.
 function _topbar(ws::Workspace, listeners::Vector{Any})
     return function (pos)
         bar = GridLayout(pos; tellwidth=false)
-        tabs = GridLayout(bar[1, 1]; halign=:left, default_colgap=2)
-        Box(bar[1, 2]; visible=false)   # spacer: menu buttons to the right edge
+        tabs = GridLayout(bar[1, 1]; halign=:left)
+        Label(bar[1, 2], ws.notice; halign=:right, fontsize=FS_BODY, color=ui().err,
+            tellwidth=false)            # also pushes the menu buttons to the right edge
         open_btn = Button(bar[1, 3]; label="Open run…", fontsize=13)
         set_btn = Button(bar[1, 4]; label="Settings", fontsize=13)
         colgap!(bar, 10)
 
-        tab_btns = Any[]
+        # Flat tabs: title (+ close ×) on the bar colour, the active one in bold
+        # accent with an accent underline. No outlines, which clip at the edges.
+        tab_items = Any[]
         function rebuild()
-            foreach(delete!, tab_btns)
-            empty!(tab_btns)
+            foreach(delete!, tab_items)
+            empty!(tab_items)
             trim!(tabs)
+            p = ui()
             col = 0
-            for p in ws.pages
-                active = p === ws.active
-                b = Button(tabs[1, col+=1]; label=p.title, fontsize=13,
-                    font=active ? :bold : :regular,
-                    buttoncolor=active ? COL_TAB_ACTIVE : COL_TAB)
-                on(_ -> _later(() -> show_page!(ws, p)), b.clicks)
-                push!(tab_btns, b)
-                if p.closable
-                    x = Button(tabs[1, col+=1]; label="×", fontsize=13,
-                        buttoncolor=active ? COL_TAB_ACTIVE : COL_TAB)
-                    on(_ -> _later(() -> close_page!(ws, p)), x.clicks)
-                    push!(tab_btns, x)
+            within = Int[]                    # column gaps between a title and its ×
+            for page in ws.pages
+                active = page === ws.active
+                style = (fontsize=FS_BODY, strokewidth=0, cornerradius=4,
+                    buttoncolor=p.bg, buttoncolor_hover=p.accent_soft, buttoncolor_active=p.accent_soft,
+                    labelcolor=active ? p.accent : p.text, labelcolor_hover=p.text)
+                first_col = col + 1
+                b = Button(tabs[1, col+=1]; label=page.title, font=active ? :bold : :regular, style...)
+                on(_ -> _later(() -> show_page!(ws, page), ws), b.clicks)
+                push!(tab_items, b)
+                if page.closable
+                    push!(within, col)
+                    x = Button(tabs[1, col+=1]; label="×", padding=(4, 8, 5, 5), style...)
+                    on(_ -> _later(() -> close_page!(ws, page), ws), x.clicks)
+                    push!(tab_items, x)
                 end
+                push!(tab_items, Box(tabs[2, first_col:col]; height=2, strokevisible=false,
+                    color=active ? p.accent : RGBAf(0, 0, 0, 0)))
             end
+            for c in 1:col-1
+                colgap!(tabs, c, c in within ? Fixed(0) : Fixed(10))
+            end
+            rowgap!(tabs, 0)
         end
         push!(listeners, on(_ -> rebuild(), ws.tabs_changed))
         rebuild()
 
-        on(_ -> _later(() -> open_run!(ws)), open_btn.clicks)
-        on(_ -> _later(() -> open_settings!(ws)), set_btn.clicks)
+        on(_ -> _later(() -> open_run!(ws), ws), open_btn.clicks)
+        on(_ -> _later(() -> open_settings!(ws), ws), set_btn.clicks)
     end
 end
 
@@ -86,32 +108,30 @@ end
 
 # ── Open run… ────────────────────────────────────────────────────────────────
 function open_run!(ws::Workspace)
-    path = try
-        NativeFileDialog.pick_file(data_dir(ws.acq.settings); filterlist="csv")
-    catch err
-        @error "Could not open the file dialog" exception = err
-        ""
-    end
+    ws.notice[] = ""
+    path = NativeFileDialog.pick_file(data_dir(ws.acq.settings); filterlist="csv")
+    @info "File dialog returned: $(repr(path))"
     isempty(path) && return
+    isfile(path) || error("$path is not a file")
     title = basename(path)
     existing = findfirst(p -> p.title == title, ws.pages)
     isnothing(existing) || return show_page!(ws, ws.pages[existing])
 
     app = AppState()
-    try
-        load_csv_log!(app, path)
-    catch err
-        @error "Could not read $path" exception = err
-        return
-    end
+    load_csv_log!(app, path)
     app.log_filename = path
-    app.log_dir = dirname(path)        # plots exported from this tab go next to the CSV
+    app.log_dir = dirname(path)        # plots exported from this tab go next to the CSV,
+    app.log_prefix = replace(basename(path), r"\.csv$"i => "")   # named after the run
     @info "Opened $path"
     show_page!(ws, add_page!(topbar -> build_gui(app; viewer=true, topbar, status=ws.acq.status),
         ws, title))
 end
 
 # ── Settings ─────────────────────────────────────────────────────────────────
+const REFRESH_HZ = [1.0, 2.0, 4.0, 10.0]
+const REFRESH_OPTIONS = ["1× per second", "2× per second", "4× per second", "10× per second"]
+_refresh_label(hz) = REFRESH_OPTIONS[something(findfirst(==(hz), REFRESH_HZ), 2)]
+
 const VOLUME_UNIT_OPTIONS = ["1 µL per count (ÄKTAprime)", "10 µL per count (ÄKTAprime plus)"]
 
 function open_settings!(ws::Workspace)
@@ -122,12 +142,12 @@ end
 
 function _settings_figure(ws::Workspace, topbar)::Figure
     acq, s = ws.acq, ws.acq.settings
-    fig = Figure(size=(1440, 900), backgroundcolor=:white)
+    fig = Figure(size=(1440, 900))
     topbar(fig[1, 1])
     g = GridLayout(fig[2, 1]; halign=:left, valign=:top, tellwidth=false, tellheight=false,
         alignmode=Outside(40))
     lbl(row, txt) = Label(g[row, 1], txt; halign=:right, fontsize=15)
-    note(row, txt) = Label(g[row, 3], txt; halign=:left, fontsize=12, color=:gray40)
+    note(row, txt) = Label(g[row, 3], txt; halign=:left, fontsize=FS_SMALL + 1, color=ui().muted)
 
     Label(g[1, 1:3], "Settings"; halign=:left, fontsize=20, font=:bold)
 
@@ -155,7 +175,16 @@ function _settings_figure(ws::Workspace, topbar)::Figure
     folder = Label(g[6, 3], data_dir(s); halign=:left, fontsize=14)
     note(7, "Log files, method dumps and exported plots are saved here, from the next log file on.")
 
-    feedback = Label(g[8, 1:3], ""; halign=:left, fontsize=13, color=:darkgreen)
+    lbl(9, "Display refresh")
+    refresh = Menu(g[9, 2]; options=REFRESH_OPTIONS, width=260, fontsize=14, halign=:left,
+        default=_refresh_label(s.refresh_hz))
+    note(9, "How often live plots redraw. Lower is lighter on the computer; data is recorded in full either way.")
+
+    lbl(8, "Dark mode")
+    dark = Toggle(g[8, 2]; active=s.dark_mode, halign=:left)
+    note(8, "Applies at the next start of the program.")
+
+    feedback = Label(g[10, 1:3], ""; halign=:left, fontsize=FS_BODY, color=ui().ok)
     rowgap!(g, 14)
     colgap!(g, 16)
 
@@ -169,14 +198,14 @@ function _settings_figure(ws::Workspace, topbar)::Figure
         s.demo_mode == on_ && return
         s.demo_mode = on_
         _later(() -> changed!(on_ ? "Demo mode on — showing simulated data." :
-                                    "Demo mode off — connecting to $(s.serial_port)."; restart=true))
+                                    "Demo mode off — connecting to $(s.serial_port)."; restart=true), ws)
     end
     on(port.stored_string) do str
         str = strip(something(str, ""))
         (isempty(str) || str == s.serial_port) && return
         s.serial_port = str
         _later(() -> changed!("Serial port set to $str." * (s.demo_mode ? "" : " Reconnecting.");
-            restart=!s.demo_mode))
+            restart=!s.demo_mode), ws)
     end
     on(unit.selection) do sel
         unit_uL = sel == VOLUME_UNIT_OPTIONS[1] ? 1.0 : 10.0
@@ -185,7 +214,7 @@ function _settings_figure(ws::Workspace, topbar)::Figure
         changed!("Volume unit set to $(Int(unit_uL)) µL per count.")
     end
     on(choose.clicks) do _
-        _later() do
+        _later(ws) do
             dir = try
                 NativeFileDialog.pick_folder(data_dir(s))
             catch err
@@ -198,6 +227,18 @@ function _settings_figure(ws::Workspace, topbar)::Figure
             folder.text = acq.app.log_dir
             changed!("Data folder set to $(acq.app.log_dir); the next log file goes there.")
         end
+    end
+    on(refresh.selection) do sel
+        hz = REFRESH_HZ[findfirst(==(sel), REFRESH_OPTIONS)]
+        s.refresh_hz == hz && return
+        s.refresh_hz = hz
+        GUI_REFRESH_S[] = 1 / hz
+        changed!("Display refresh set to $sel.")
+    end
+    on(dark.active) do on_
+        s.dark_mode == on_ && return
+        s.dark_mode = on_
+        changed!((on_ ? "Dark" : "Light") * " mode saved; restart the program to apply it.")
     end
     on(prefix.stored_string) do str
         str = strip(something(str, ""))

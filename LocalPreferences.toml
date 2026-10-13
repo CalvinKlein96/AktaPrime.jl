@@ -1,6 +1,8 @@
 [AktaPrime]
+dark_mode = false
 data_dir = "/home/calvin/Desktop/Akta_logs"
 demo_mode = false
 log_prefix = "calvin"
+refresh_hz = 2.0
 serial_port = "/dev/ttyUSB0"
 volume_unit_uL = 1.0

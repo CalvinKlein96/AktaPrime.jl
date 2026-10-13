@@ -1,17 +1,14 @@
 # gui.jl — GLMakie real-time chromatography display
 
 # ── Colour palette ────────────────────────────────────────────────────────────
-const COL_UV = RGBf(0.15, 0.35, 0.70)
-const COL_COND = RGBf(0.80, 0.20, 0.10)
-const COL_PCTB = RGBf(0.10, 0.55, 0.25)
-const COL_PRES = RGBf(0.75, 0.45, 0.00)
-const COL_PH = RGBf(0.55, 0.25, 0.65)
-const COL_FLOW = RGBf(0.10, 0.45, 0.55)
+# Light-palette colours: exported PDFs always use these (see theme.jl).
+const COL_UV = LIGHT.uv
+const COL_COND = LIGHT.cond
+const COL_PCTB = LIGHT.pctb
+const COL_PRES = LIGHT.pres
+const COL_PH = LIGHT.ph
+const COL_FLOW = LIGHT.flow
 
-const COL_BUF_A = RGBf(0.80, 0.10, 0.10)   # red — buffer valve port 1 (standard buffer A)
-const COL_BUF_PORT = RGBf(0.95, 0.55, 0.25)   # orange — buffer valve ports 2–7
-const COL_SAMPLE = RGBf(0.70, 0.35, 0.80)   # violet — buffer valve port 8 (sample loading)
-const COL_BUF_B = RGBf(0.90, 0.80, 0.05)   # yellow
 
 const FRAC_COLORS = [RGBf(0.8, 0.9, 1.0), RGBf(1.0, 1.0, 0.8)]  # light blue, light yellow
 const FRAC_ALPHA = 0.22
@@ -121,13 +118,13 @@ _channel_ylabel(name, unit) = isempty(unit) ? name : "$name ($unit)"
 # Overlay y-axis: in % of range by default, or in the real units of the highlighted
 # trace. `getrange()` returns that trace's current (lo, hi), which map to 0–100 %;
 # ticks are chosen on the real values and placed at their scaled positions.
-function _set_overlay_yaxis!(ax, highlight)
+function _set_overlay_yaxis!(ax, highlight; p=ui())
     if isnothing(highlight)
         ax.yticks = Makie.automatic
         ax.ytickformat = Makie.automatic
         ax.ylabel = "Scaled (% of range)"
-        ax.ylabelcolor = :black
-        ax.yticklabelcolor = :black
+        ax.ylabelcolor = p.muted
+        ax.yticklabelcolor = p.muted
         return
     end
     name, unit, col, getrange = highlight
@@ -171,7 +168,7 @@ function _event_label_positions(xs::AbstractVector{<:Real}, labels::AbstractVect
                               2 + r * rowh > avoid[3] && 2 + (r - 1) * rowh < avoid[4]
     for i in sortperm(xs)
         start = (xs[i] - x0) / w * pxw + gap
-        stop = start + length(labels[i]) * EVENT_LABEL_FONTSIZE * 0.6 + gap
+        stop = start + length(labels[i]) * EVENT_LABEL_FONTSIZE * 0.72 + gap
         r = 1
         while (r <= length(row_end) && row_end[r] >= start) || blocked(r, start, stop)
             r += 1
@@ -189,7 +186,7 @@ function _event_labels!(ax, evts, x_mode_is_vol; avoid=Observable(nothing))
     lbls = @lift [_event_label_top(e) for e in $evts]
     pts = @lift _event_label_positions([_event_x(e, $x_mode_is_vol) for e in $evts], $lbls,
         $(ax.finallimits), $(ax.scene.viewport).widths, $avoid)
-    text!(ax, pts; text=lbls, fontsize=EVENT_LABEL_FONTSIZE, color=:gray25,
+    text!(ax, pts; text=lbls, fontsize=EVENT_LABEL_FONTSIZE, color=ui().muted,
         align=(:left, :top), xautolimits=false, yautolimits=false)
 end
 
@@ -243,27 +240,12 @@ function _flow_at(events::AbstractVector{AktaEvent}, p::TrendPoint)
     return flow
 end
 
-function _status_text(s::InstrumentState, p::Union{Nothing,TrendPoint}, flow, header::String,
-    file::String)::String
+# One-line valve summary for the flow-path card.
+function _valve_summary(s::InstrumentState)::String
     port = s.buffer_port == 1 ? "1 (A)" : s.buffer_port == 8 ? "8 (sample)" : string(s.buffer_port)
-    port *= s.buffer_port_known ? "" : " — assumed"
-    values = isnothing(p) ? "" : """
-
-UV: $(@sprintf("%.4f", p.uv)) AU   %B: $(@sprintf("%.1f", p.pctb))
-Cond: $(@sprintf("%.2f", p.cond_mScm)) mS/cm   pH: $(@sprintf("%.2f", p.ph))
-Pressure: $(@sprintf("%.3f", p.pres_MPa)) MPa   T: $(@sprintf("%.1f", p.temp_degC)) °C"""
-    return """
-$header
-State: $(s.run_state)
-Run time: $(@sprintf("%.2f", s.run_time_ms / 60_000)) min
-Run volume: $(@sprintf("%.4f", s.run_vol_mL)) mL
-Flow: $(isnothing(flow) ? "---" : @sprintf("%.2f mL/min", flow))
-Valve: $(lowercase(_inject_label(s.inject_value)))
-Buffer valve: $port
-Output: $(s.fraction_vol_mL > 0 ? "frac collector" : "waste")
-Fraction #: $(s.fraction_number)
-Fraction volume: $(@sprintf("%.2f", s.fraction_vol_mL)) mL$values
-File: $file"""
+    outlet = s.fraction_vol_mL > 0 ?
+             "frac #$(s.fraction_number), $(@sprintf("%.2f", s.fraction_vol_mL)) mL" : "waste"
+    return "Valve $(lowercase(_inject_label(s.inject_value))) · Buffer $port · Outlet $outlet"
 end
 
 function _fraction_label_bottom(e::AktaEvent)::String
@@ -275,11 +257,49 @@ function _fraction_label_bottom(e::AktaEvent)::String
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Display refresh
+# ─────────────────────────────────────────────────────────────────────────────
+# The GUI refreshes at a fixed rate (Settings → Display refresh) rather than on
+# every data point: recomputing all views costs tens of ms per point on long
+# runs, which at ~8 points/s would keep the GUI thread busy. Recording is not
+# affected; only what is drawn is batched.
+const GUI_REFRESH_S = Ref(0.5)
+
+# Copies of `srcs` that pass changes on at most every GUI_REFRESH_S.
+function _throttled(srcs::Observable...)
+    proxies = map(o -> Observable(o[]), srcs)
+    dirty = fill(false, length(srcs))
+    for (i, o) in enumerate(srcs)
+        on(_ -> (dirty[i] = true), o)
+    end
+    @async while true
+        sleep(GUI_REFRESH_S[])
+        try
+            for i in eachindex(srcs)
+                dirty[i] || continue
+                dirty[i] = false
+                proxies[i][] = srcs[i][]
+            end
+        catch err
+            @error "GUI refresh failed" exception = (err, catch_backtrace())
+        end
+    end
+    return proxies
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # build_gui — construct the Figure and wire all Observables
 # ─────────────────────────────────────────────────────────────────────────────
 function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
     status::Union{Nothing,Observable{String}}=nothing)::Figure
-    fig = Figure(size=(1440, 900), backgroundcolor=:white)
+    fig = Figure(size=(1440, 900))      # colours and fonts from the theme (theme.jl)
+    pal = ui()                          # palette; not `p`, which closures below use for points
+
+    # Live data reaches the views through throttled copies (see _throttled); a
+    # log opened for viewing does not change, so it is used directly.
+    trend_obs, events_obs, inst_obs, fracs_obs = viewer ?
+        (app.trend_data, app.events, app.inst, app.fractions) :
+        _throttled(app.trend_data, app.events, app.inst, app.fractions)
 
     # Layout, one area per job:
     #   top bar      navigation and global actions (tabs, menu; see workspace.jl)
@@ -326,7 +346,7 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
     # ── Data observables ──────────────────────────────────────────────────────
     # Guard: provide a dummy point when empty so GLMakie axis autoscaling
     # never reduces over an empty collection on first render.
-    _trend = @lift let d = $(app.trend_data)
+    _trend = @lift let d = $(trend_obs)
         isempty(d) ? [TrendPoint(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)] : d
     end
     uv_pts = @lift [Point2f(_trend_x(p, $x_mode_is_vol), p.uv) for p in $_trend]
@@ -335,23 +355,23 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
     pctb_pts = @lift [Point2f(_trend_x(p, $x_mode_is_vol), p.pctb) for p in $_trend]
     pres_pts = @lift [Point2f(_trend_x(p, $x_mode_is_vol), p.pres_MPa) for p in $_trend]
     # Same empty-guard as _trend: a dummy point until the first flow message arrives.
-    rate_pts = @lift let pts = _flow_setpoints($(app.events), $(app.trend_data), $x_mode_is_vol)
+    rate_pts = @lift let pts = _flow_setpoints($(events_obs), $(trend_obs), $x_mode_is_vol)
         isempty(pts) ? [Point2f(0, 0)] : pts
     end
 
-    lines!(ax_uv, uv_pts, color=COL_UV, linewidth=1.5)
-    pl_pctb = lines!(ax_pctb, pctb_pts, color=COL_PCTB, linewidth=1.5)
-    pl_cond = lines!(ax_cond, cond_pts, color=COL_COND, linewidth=1.5)
-    pl_ph = lines!(ax_ph, ph_pts, color=COL_PH, linewidth=1.5)
-    pl_pres = lines!(ax_pres, pres_pts, color=COL_PRES, linewidth=1.5)
-    pl_rate = stairs!(ax_rate, rate_pts; step=:post, color=COL_FLOW, linewidth=1.5)
+    lines!(ax_uv, uv_pts, color=pal.uv, linewidth=1.6)
+    pl_pctb = lines!(ax_pctb, pctb_pts, color=pal.pctb, linewidth=1.6)
+    pl_cond = lines!(ax_cond, cond_pts, color=pal.cond, linewidth=1.6)
+    pl_ph = lines!(ax_ph, ph_pts, color=pal.ph, linewidth=1.6)
+    pl_pres = lines!(ax_pres, pres_pts, color=pal.pres, linewidth=1.6)
+    pl_rate = stairs!(ax_rate, rate_pts; step=:post, color=pal.flow, linewidth=1.6)
 
     # ── Event vlines on UV panel ──────────────────────────────────────────────
     # xautolimits/yautolimits=false prevents Makie calling extrema on empty vectors.
     for kind in instances(EventKind)
         let kind = kind
             color, style = get(EVT_COLORS, kind, (:black, :dash))
-            evts_k = @lift filter(e -> e.kind == kind, $(app.events))
+            evts_k = @lift filter(e -> e.kind == kind, $(events_obs))
             evt_x_k = @lift [_event_x(e, $x_mode_is_vol) for e in $evts_k]
             for ax in (ax_uv, ax_ov)
                 vlines!(ax, evt_x_k; color=(color, 0.55), linestyle=style, linewidth=1.0,
@@ -363,7 +383,7 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
     # ── Fraction collection spans on UV and %B panels ──────────────────────────
     # Build starts/ends/colors from one observable to keep lengths in lockstep.
     fraction_spans = @lift begin
-        fracs = $(app.fractions)
+        fracs = $(fracs_obs)
         by_vol = $x_mode_is_vol
 
         starts = Float64[]
@@ -417,7 +437,7 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
     # ── Other event text labels on UV panel ────────────────────────────────────
     # Filter other events, keeping only the non-tube-feed events (and zero-transition fraction size changes)
     evt_other = @lift begin
-        events = $(app.events)
+        events = $(events_obs)
         # Track fraction volume state to detect zero-transitions
         frac_vol_states = Float64[]
         for e in events
@@ -492,21 +512,58 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
     shown_point = Observable{Union{Nothing,TrendPoint}}(nothing)
     shown_header = Observable("")
 
-    # ── Status read-out — left-aligned text ────────────────────────────────────
-    status_text = @lift _status_text($shown_state, $shown_point,
-        isnothing($shown_point) ? nothing : _flow_at(app.events[], $shown_point),
-        $shown_header, basename(app.log_filename))
-    Label(right[1, 1], status_text;
-        halign=:left, justification=:left, tellwidth=false, fontsize=13)
+    # ── Right panel: cards for the run, the readings and the flow path ─────────
+    shown_flow = @lift isnothing($shown_point) ? nothing : _flow_at(app.events[], $shown_point)
+    fmt(fmtstr, x) = isnothing(x) ? "—" : Printf.format(Printf.Format(fmtstr), x)
 
-    # ── Flow path schematic ─────────────────────────────────────────────────────
-    ax_flow = Axis(right[2, 1];
+    # Run: what is shown (live / a past moment / end of log), state and position.
+    run = card!(right[1, 1], "Run")
+    mode = @lift startswith($shown_header, "●") ? ("LIVE", pal.ok) :
+                 startswith($shown_header, "◀") ? ("VIEWING", pal.warn) :
+                 startswith($shown_header, "End") ? ("END OF LOG", pal.muted) : ("NO DATA", pal.muted)
+    chip!(run[1, 1], @lift($mode[1]), @lift($mode[2]))
+    Label(run[1, 2:3], @lift(isnothing($shown_point) ? "" : string($shown_state.run_state));
+        halign=:right, fontsize=FS_BODY, font=:bold, tellwidth=false)
+    function stat!(row, col, name, value)
+        g = GridLayout(run[row, col]; halign=:left, default_rowgap=0)
+        Label(g[1, 1], name; halign=:left, fontsize=FS_SMALL, color=pal.muted)
+        Label(g[2, 1], value; halign=:left, fontsize=15, font=:bold)
+    end
+    stat!(2, 1, "Run time", @lift(fmt("%.2f min", $shown_state.run_time_ms / 60_000)))
+    stat!(2, 2, "Run volume", @lift(fmt("%.3f mL", $shown_state.run_vol_mL)))
+    stat!(2, 3, "Set flow", @lift(fmt("%.2f mL/min", $shown_flow)))
+    colgap!(run, 18)
+    rowgap!(run, 8)
+
+    # Readings: big numbers, named in their trace colour.
+    readings = card!(right[2, 1], "Readings")
+    for (i, (name, unit, key, f, col)) in enumerate((
+        ("UV", "AU", :uv, "%.4f", pal.uv), ("%B", "%", :pctb, "%.1f", pal.pctb),
+        ("Cond", "mS/cm", :cond_mScm, "%.2f", pal.cond), ("pH", "", :ph, "%.2f", pal.ph),
+        ("Pressure", "MPa", :pres_MPa, "%.3f", pal.pres), ("Temp", "°C", :temp_degC, "%.1f", pal.muted)))
+        g = GridLayout(readings[(i - 1) ÷ 3 + 1, (i - 1) % 3 + 1]; halign=:left, default_rowgap=0)
+        Label(g[1, 1:2], name; halign=:left, fontsize=FS_SMALL, font=:bold, color=col)
+        Label(g[2, 1], @lift(isnothing($shown_point) ? "—" : fmt(f, getfield($shown_point, key)));
+            halign=:left, fontsize=FS_READING, font=:bold)
+        Label(g[2, 2], unit; halign=:left, valign=:bottom, fontsize=FS_SMALL, color=pal.muted)
+        colgap!(g, 4)
+    end
+    colgap!(readings, 18)
+    rowgap!(readings, 10)
+
+    # Flow path: one-line valve summary above the schematic.
+    path = card!(right[3, 1], "Flow path")
+    Label(path[1, 1], @lift(_valve_summary($shown_state)); halign=:left, fontsize=FS_SMALL + 1,
+        color=pal.muted, tellwidth=false)
+    ax_flow = Axis(path[2, 1]; backgroundcolor=pal.panel,
         xgridvisible=false, ygridvisible=false,
         xticksvisible=false, yticksvisible=false,
         xticklabelsvisible=false, yticklabelsvisible=false,
         leftspinevisible=false, rightspinevisible=false,
         topspinevisible=false, bottomspinevisible=false,
         limits=(0.3, 8.1, 1.3, 13.3))
+    rowsize!(right, 3, Auto(1))
+    rowgap!(right, 10)
     _draw_flow_schematic!(ax_flow, shown_state, shown_point)
 
     # Full-extent autoscale of every panel. All linked axes must be reset: one left
@@ -544,12 +601,12 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
     # ── Overlay traces ──────────────────────────────────────────────────────────
     # (key, name, unit, colour, points, visibility toggle — nothing means always shown)
     ov_channels = (
-        (:uv, "UV", "AU", COL_UV, uv_pts, nothing),
-        (:pctb, "%B", "%", COL_PCTB, pctb_pts, tg_pctb),
-        (:cond, "Cond", "mS/cm", COL_COND, cond_pts, tg_cond),
-        (:ph, "pH", "", COL_PH, ph_pts, tg_ph),
-        (:pres, "Pressure", "MPa", COL_PRES, pres_pts, tg_pres),
-        (:flow, "Flow", "mL/min", COL_FLOW, rate_pts, tg_rate))
+        (:uv, "UV", "AU", pal.uv, uv_pts, nothing),
+        (:pctb, "%B", "%", pal.pctb, pctb_pts, tg_pctb),
+        (:cond, "Cond", "mS/cm", pal.cond, cond_pts, tg_cond),
+        (:ph, "pH", "", pal.ph, ph_pts, tg_ph),
+        (:pres, "Pressure", "MPa", pal.pres, pres_pts, tg_pres),
+        (:flow, "Flow", "mL/min", pal.flow, rate_pts, tg_rate))
 
     # Clicking a legend entry highlights that trace; clicking it again clears it.
     highlighted = Observable{Union{Nothing,Symbol}}(nothing)
@@ -578,7 +635,7 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
             end)
     end
     # Its range grows with the data, so refresh the ticks when it changes.
-    on(app.trend_data) do _
+    on(trend_obs) do _
         isnothing(highlighted[]) || notify(ax_ov.yticks)
     end
 
@@ -601,7 +658,7 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
         for (key, btn) in legend_btns
             on_ = highlighted[] === key
             btn.font = on_ ? :bold : :regular
-            btn.buttoncolor = on_ ? RGBf(0.90, 0.93, 0.98) : RGBAf(1, 1, 1, 0.85)
+            btn.buttoncolor = on_ ? ui().accent_soft : RGBAf(ui().panel, 0.9)
         end
     end
 
@@ -614,7 +671,7 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
             (isnothing(tg) || tg.checked[]) || continue
             btn = Button(legend[length(legend_btns)+1, 1]; label=ov_labels[key],
                 fontsize=12, labelcolor=col, labelcolor_hover=col, labelcolor_active=col,
-                buttoncolor_hover=RGBf(0.95, 0.95, 0.95), buttoncolor_active=RGBf(0.85, 0.88, 0.95),
+                buttoncolor_hover=ui().accent_soft, buttoncolor_active=ui().accent_soft,
                 strokecolor=(col, 0.6), strokewidth=1, cornerradius=4,
                 padding=(6, 6, 3, 3), halign=:left)
             on(btn.clicks) do _
@@ -644,9 +701,7 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
         ax.ygridvisible = false   # no horizontal grid lines
         ax.xticksvisible = vis
         ax.leftspinevisible = vis
-        ax.rightspinevisible = vis
-        ax.topspinevisible = vis
-        ax.bottomspinevisible = vis
+        ax.bottomspinevisible = vis      # open frame: no top/right spines (theme.jl)
         # x tick labels and the x axis label are re-enabled only on the bottom
         # visible panel, below.
         ax.xticklabelsvisible = false
@@ -719,18 +774,24 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
         follow && rescale!()
     end
 
-    on(app.trend_data) do _
+    on(trend_obs) do _
         tg_follow.checked[] && rescale!()
     end
 
     # ── Status bar: connection · recording · mouse help ────────────────────────
-    Box(fig[r+2, 1]; color=RGBf(0.95, 0.95, 0.95), strokevisible=false)
+    Box(fig[r+2, 1]; color=pal.panel, strokecolor=pal.border, cornerradius=6)
     statusbar = GridLayout(fig[r+2, 1]; alignmode=Outside(6), tellwidth=false)
-    conn = isnothing(status) ? Observable(viewer ? "" : "Live") : status
-    Label(statusbar[1, 1], conn; halign=:left, fontsize=12, color=:gray25)
+    col = 0
+    if !isnothing(status)
+        # Connection chip: green connected, amber waiting, red port missing, blue demo.
+        chip!(statusbar[1, col+=1], @lift(replace($status, "● " => "")), @lift(status_color($status)))
+        demo = @lift startswith($status, "Demo")
+        chip!(statusbar[1, col+=1], @lift($demo ? "DEMO" : ""),
+            @lift($demo ? pal.demo : RGBAf(0, 0, 0, 0)))
+    end
     recording = @lift begin
-        td = $(app.trend_data)
-        $(app.events)
+        td = $(trend_obs)
+        $(events_obs)
         file = basename(app.log_filename)
         if viewer
             "Viewing $file · $(length(td)) points"
@@ -738,14 +799,22 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
             "Not recording"
         else
             t = isempty(td) ? 0.0 : td[end].cum_time_ms / 60_000
-            "● REC  $file · $(@sprintf("%.1f", t)) min"
+            "$file · $(@sprintf("%.1f", t)) min"
         end
     end
-    Label(statusbar[1, 2], recording; halign=:left, fontsize=12,
-        color=@lift(startswith($recording, "●") ? :firebrick : :gray25))
-    Label(statusbar[1, 3], "Drag: zoom · Right-drag: pan · Ctrl-click: reset · Alt/Shift-click: inspect moment";
-        halign=:right, fontsize=11, color=:gray45, tellwidth=false)
-    colgap!(statusbar, 24)
+    is_rec = @lift !viewer && !isnothing(app.csv_io) && $recording != "Not recording"
+    # REC chip with a blinking dot while writing a log.
+    blink = Observable(true)
+    chip!(statusbar[1, col+=1], @lift($is_rec ? ($blink ? "● REC" : "   REC") : "NOT RECORDING"),
+        @lift($is_rec ? pal.rec : pal.faint))
+    Label(statusbar[1, col+=1], recording; halign=:left, fontsize=FS_SMALL + 1, color=pal.muted)
+    Label(statusbar[1, col+=1], "Drag: zoom · Right-drag: pan · Ctrl-click: reset · Alt/Shift-click: inspect moment";
+        halign=:right, fontsize=FS_SMALL, color=pal.muted, tellwidth=false)
+    colgap!(statusbar, 10)
+    viewer || @async while true      # one flag flip every 0.6 s; ends with the program
+        sleep(0.6)
+        is_rec[] && (blink[] = !blink[])
+    end
 
     # ── Time slider: inspect a past moment ─────────────────────────────────────
     # Selects a trend point; at the right end it follows the newest data. The
@@ -786,22 +855,22 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
         update_shown!()
     end
     # New data: extend the slider; keep the newest point selected while following.
-    on(app.trend_data) do td
+    on(trend_obs) do td
         sel_slider.range[] = 1:max(1, length(td))
         following[] ? set_close_to!(sel_slider, length(td)) : update_shown!()
     end
     live_view() = following[] && !viewer
-    on(_ -> live_view() && update_shown!(), app.inst)            # live state changed
-    on(_ -> live_view() || update_shown!(), app.events)          # a past state may change
+    on(_ -> live_view() && update_shown!(), inst_obs)            # live state changed
+    on(_ -> live_view() || update_shown!(), events_obs)          # a past state may change
 
     # Dashed marker at the selected moment in every panel (none while following live).
     marker_x = @lift begin
-        td = $(app.trend_data)
+        td = $(trend_obs)
         $following || isempty(td) ? Float32[] :
             [_trend_x(td[clamp($(sel_slider.value), 1, length(td))], $x_mode_is_vol)]
     end
     for ax in plot_axes
-        vlines!(ax, marker_x; color=(:black, 0.7), linestyle=:dash, linewidth=1.5,
+        vlines!(ax, marker_x; color=(ui().text, 0.6), linestyle=:dash, linewidth=1.5,
             xautolimits=false, yautolimits=false)
         # Alt- or Shift-click jumps the slider to the nearest data point.
         register_interaction!(ax, :inspect_moment) do event, _
@@ -897,11 +966,15 @@ function _save_plot_pdf(app::AppState, axes, toggles, by_vol::Bool, counter::Ref
     # The overlay keeps its on-screen y-range only when it is the view being shown.
     yr = ax_ov.finallimits[]
     ov_ylims = overlay ? (yr.origin[2], yr.origin[2] + yr.widths[2]) : OVERLAY_YLIMS
-    expfig = Figure(size=(1000, 200 * length(specs) + 500), backgroundcolor=:white)
-    _stacked_export!(expfig[1, 1], trend, events, fracs, specs, by_vol, xlab, (xlo, xhi))
-    _overlay_export!(expfig[2, 1], trend, events, fracs, specs, by_vol, xlab, (xlo, xhi),
-        ov_ylims, highlighted)
-    rowsize!(expfig.layout, 2, Relative(500 / (200 * length(specs) + 500)))
+    # Paper is white: the export always uses the light theme, even in dark mode.
+    expfig = with_theme(makie_theme(LIGHT)) do
+        f = Figure(size=(1000, 200 * length(specs) + 500), backgroundcolor=:white)
+        _stacked_export!(f[1, 1], trend, events, fracs, specs, by_vol, xlab, (xlo, xhi))
+        _overlay_export!(f[2, 1], trend, events, fracs, specs, by_vol, xlab, (xlo, xhi),
+            ov_ylims, highlighted)
+        rowsize!(f.layout, 2, Relative(500 / (200 * length(specs) + 500)))
+        f
+    end
 
     counter[] += 1
     prefix = isempty(app.log_prefix) ? "akta" : app.log_prefix
@@ -961,7 +1034,7 @@ end
 function _overlay_export!(pos, trend, events, fracs, specs, by_vol::Bool, xlab,
     (xlo, xhi), (ylo, yhi), highlighted)
     ax = Axis(pos; xlabel=xlab, xgridvisible=false, ygridvisible=false)
-    _set_overlay_yaxis!(ax, nothing)
+    _set_overlay_yaxis!(ax, nothing; p=LIGHT)
     _draw_fraction_spans!(ax, fracs, trend, by_vol)
     for e in events
         c, style = get(EVT_COLORS, e.kind, (:black, :dash))
@@ -977,7 +1050,7 @@ function _overlay_export!(pos, trend, events, fracs, specs, by_vol::Bool, xlab,
         color = RGBAf(col.r, col.g, col.b, dim ? 0.2 : 1.0)
         lw = highlighted === chan ? 3.0 : 1.5
         label = replace(_overlay_label(names[chan]..., range), "━━  " => "")
-        highlighted === chan && _set_overlay_yaxis!(ax, (names[chan]..., col, () -> range))
+        highlighted === chan && _set_overlay_yaxis!(ax, (names[chan]..., col, () -> range); p=LIGHT)
         chan === :flow ?
             stairs!(ax, scaled; step=:post, color=color, linewidth=lw, label=label) :
             lines!(ax, scaled; color=color, linewidth=lw, label=label)
@@ -990,23 +1063,39 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 function _draw_flow_schematic!(ax, state::Observable{InstrumentState},
     point::Observable{Union{Nothing,TrendPoint}})
-    function box!(ax, cx, cy, w, h, label; color=:lightblue, fontsize=9)
-        poly!(ax, Rect2f(cx - w / 2, cy - h / 2, w, h);
-            color=color, strokecolor=:black, strokewidth=1)
-        text!(ax, cx, cy; text=label, fontsize=fontsize,
-            align=(:center, :center), font=:bold)
-    end
+    pal = ui()
+    # Soft fill of a state colour, blended onto the card so it stays opaque:
+    # pipes ending under a node must not show through its label.
+    tint(c, a=0.22) = RGBf(a * c.r + (1 - a) * pal.panel.r, a * c.g + (1 - a) * pal.panel.g,
+        a * c.b + (1 - a) * pal.panel.b)
 
-    function diamond!(ax, cx, cy, w, h; color=:lightgray)
-        verts = Point2f[
-            (cx, cy + h / 2),
-            (cx + w / 2, cy),
-            (cx, cy - h / 2),
-            (cx - w / 2, cy),
-        ]
-        poly!(ax, verts; color=color, strokecolor=:black, strokewidth=1)
+    # Rounded rectangle; radii in data units, the y one larger as the axis is
+    # taller than wide in data units per pixel.
+    function rrect(cx, cy, w, h; rx=0.14, ry=0.18, n=6)
+        pts = Point2f[]
+        for (ccx, ccy, a0) in ((cx + w/2 - rx, cy + h/2 - ry, 0.0), (cx - w/2 + rx, cy + h/2 - ry, π/2),
+                               (cx - w/2 + rx, cy - h/2 + ry, π), (cx + w/2 - rx, cy - h/2 + ry, 3π/2))
+            for k in 0:n
+                t = a0 + (π/2) * k / n
+                push!(pts, Point2f(ccx + rx * cos(t), ccy + ry * sin(t)))
+            end
+        end
+        return pts
     end
+    # Boxes grow to fit their label with a margin (≈0.16 data units per character).
+    fitw(label, w) = max(w, 0.16 * length(label) + 0.55)
+    box_h = 0.86
+    function node!(cx, cy, w, h, label; color=pal.node, textcolor=pal.node_text, fontsize=10)
+        poly!(ax, rrect(cx, cy, fitw(label, w), max(h, box_h)); color=color,
+            strokecolor=pal.border, strokewidth=1.2)
+        text!(ax, cx, cy; text=label, fontsize=fontsize, align=(:center, :center), font=:bold,
+            color=textcolor)
+    end
+    diamond(cx, cy, w, h) = Point2f[(cx, cy + h/2), (cx + w/2, cy), (cx, cy - h/2), (cx - w/2, cy)]
 
+    # Pipes are drawn only while liquid flows through them (see on(state) below).
+    pipe!(xs, ys; color=pal.pipe, lw=3.2) =
+        lines!(ax, xs, ys; color=color, linewidth=lw, linecap=:round, visible=false)
     setvisible!(ln, active) = (ln.visible[] = active)
 
     # ── Node coordinates (staggered vertically for readability) ─────────────
@@ -1032,78 +1121,77 @@ function _draw_flow_schematic!(ax, state::Observable{InstrumentState},
     x_vlv = 2.9
     y_port = 12.45
     port_x = [x_vlv + 0.62 * (i - (n_ports + 1) / 2) for i in 1:n_ports]
-    port_color(i) = i == 1 ? COL_BUF_A : i == n_ports ? COL_SAMPLE : COL_BUF_PORT
+    port_color(i) = i == 1 ? pal.buf_a : i == n_ports ? pal.sample : pal.buf_port
 
-    ln_ports = [lines!(ax, [port_x[i], x_vlv], [y_port - 0.24, y_buf + 0.31];
-        color=port_color(i), linewidth=2.2, visible=false) for i in 1:n_ports]
+    ln_ports = [pipe!([port_x[i], x_vlv], [y_port - 0.24, y_buf + 0.31];
+        color=port_color(i), lw=2.6) for i in 1:n_ports]
 
     # Geometry chosen to mirror the requested routing diagrams.
-    ln_buf_a = lines!(ax, [x_vlv, x_c], [y_buf - 0.31, y_mix + 0.02]; color=COL_BUF_A, linewidth=2.2, visible=false)
-    ln_buf_b = lines!(ax, [x_frac, x_c], [11.0, y_mix + 0.02]; color=COL_BUF_B, linewidth=2.2, visible=false)
-    ln_mix_to_valve = lines!(ax, [x_c, x_c], [y_mix - 0.38, y_inj + 0.42]; color=:steelblue, linewidth=2.5, visible=false)
+    ln_buf_a = pipe!([x_vlv, x_c], [y_buf - 0.31, y_mix + 0.02]; color=pal.buf_a)
+    ln_buf_b = pipe!([x_frac, x_c], [11.0, y_mix + 0.02]; color=pal.buf_b)
+    ln_mix_to_valve = pipe!([x_c, x_c], [y_mix - 0.38, y_inj + 0.42])
 
     # ── Switchable paths (inject + syringe + output valve) ──────────────────
-    ln_load_core = lines!(ax, [x_c, x_c], [y_inj - 0.42, y_col + 0.42]; color=:steelblue, linewidth=2.7, visible=false)
-    ln_inj_to_loop = lines!(ax, [x_c, x_r], [y_inj, y_loop]; color=:steelblue, linewidth=2.7, visible=false)
-    ln_inj_return = lines!(ax, [x_r, x_c], [y_loop, y_col]; color=:steelblue, linewidth=2.7, visible=false)
-    ln_waste_byp = lines!(ax, [x_c, x_l], [y_inj, y_waste_inj]; color=:steelblue, linewidth=2.7, visible=false)
+    ln_load_core = pipe!([x_c, x_c], [y_inj - 0.42, y_col + 0.42])
+    ln_inj_to_loop = pipe!([x_c, x_r], [y_inj, y_loop])
+    ln_inj_return = pipe!([x_r, x_c], [y_loop, y_col])
+    ln_waste_byp = pipe!([x_c, x_l], [y_inj, y_waste_inj])
 
-    ln_syr_to_loop = lines!(ax, [x_r, x_r], [y_syr - 0.34, y_loop + 0.34]; color=:steelblue, linewidth=2.1, visible=false)
-    ln_loop_waste = lines!(ax, [x_r, x_r], [y_loop - 0.34, y_waste_loop + 0.34]; color=:steelblue, linewidth=2.1, visible=false)
+    ln_syr_to_loop = pipe!([x_r, x_r], [y_syr - 0.34, y_loop + 0.34]; lw=2.6)
+    ln_loop_waste = pipe!([x_r, x_r], [y_loop - 0.34, y_waste_loop + 0.34]; lw=2.6)
 
-    ln_col_to_uv = lines!(ax, [x_c, x_c], [y_col - 0.42, y_uv + 0.42]; color=:steelblue, linewidth=2.5, visible=false)
-    ln_uv_to_out = lines!(ax, [x_c, x_c], [y_uv - 0.42, y_out + 0.40]; color=:steelblue, linewidth=2.5, visible=false)
-    ln_out_waste = lines!(ax, [x_c, x_l], [y_out, y_bottom]; color=:gray45, linewidth=2.4, visible=false)
-    ln_out_frac = lines!(ax, [x_c, x_frac], [y_out, y_bottom]; color=:forestgreen, linewidth=2.4, visible=false)
+    ln_col_to_uv = pipe!([x_c, x_c], [y_col - 0.42, y_uv + 0.42])
+    ln_uv_to_out = pipe!([x_c, x_c], [y_uv - 0.42, y_out + 0.40])
+    ln_out_waste = pipe!([x_c, x_l], [y_out, y_bottom]; color=pal.muted)
+    ln_out_frac = pipe!([x_c, x_frac], [y_out, y_bottom]; color=pal.frac)
 
-    # ── Static symbols ───────────────────────────────────────────────────────
-    # The mixer box itself is drawn below as a live %B-coloured poly, so it is
-    # deliberately omitted here to avoid a doubled label.
-    port_polys = [poly!(ax, Rect2f(port_x[i] - 0.25, y_port - 0.24, 0.50, 0.48);
-        color=:gray92, strokecolor=:black, strokewidth=1) for i in 1:n_ports]
-    for i in 1:n_ports
-        text!(ax, port_x[i], y_port; text=string(i), fontsize=10,
-            align=(:center, :center), font=:bold)
-    end
-    text!(ax, port_x[1], y_port + 0.30; text="A", fontsize=9, align=(:center, :bottom), color=:gray35)
-    text!(ax, port_x[end], y_port + 0.30; text="Sample", fontsize=9, align=(:center, :bottom), color=:gray35)
-    vlv_poly = poly!(ax, Rect2f(x_vlv - 1.2, y_buf - 0.31, 2.4, 0.62);
-        color=COL_BUF_A, strokecolor=:black, strokewidth=1)
-    vlv_txt = text!(ax, x_vlv, y_buf; text="BUFFER VALVE", fontsize=10,
-        align=(:center, :center), font=:bold)
-    box!(ax, x_frac, y_buf, 1.30, 0.62, "Buffer B"; color=COL_BUF_B, fontsize=11)
-    inj_poly = diamond!(ax, x_c, y_inj, 1.55, 0.92; color=:lightgray)
-    box!(ax, x_c, y_col, 1.35, 0.74, "COLUMN"; color=:wheat, fontsize=11)
-    box!(ax, x_c, y_uv, 1.48, 0.78, "UV / COND"; color=:lightyellow, fontsize=11)
-    out_poly = diamond!(ax, x_c, y_out, 1.30, 0.84; color=:azure2)
-    box!(ax, x_r, y_syr, 1.45, 0.62, "SYRINGE"; color=:mistyrose2, fontsize=11)
-    box!(ax, x_r, y_loop, 1.20, 0.62, "LOOP"; color=:gray95, fontsize=11)
-    box!(ax, x_frac, y_bottom, 1.25, 0.68, "FRAC"; color=:lightgreen, fontsize=11)
-    box!(ax, x_l, y_bottom, 1.30, 0.62, "WASTE"; color=:gray92, fontsize=11)
-    box!(ax, x_r, y_waste_loop, 1.30, 0.62, "WASTE"; color=:gray92, fontsize=11)
-    box!(ax, x_l, y_waste_inj, 1.30, 0.62, "WASTE"; color=:gray92, fontsize=11)
+    # ── Nodes ────────────────────────────────────────────────────────────────
+    port_polys = [poly!(ax, rrect(port_x[i], y_port, 0.50, 0.48; rx=0.08, ry=0.10);
+        color=pal.node, strokecolor=pal.border, strokewidth=1.2) for i in 1:n_ports]
+    port_txt = [text!(ax, port_x[i], y_port; text=string(i), fontsize=10,
+        align=(:center, :center), font=:bold, color=pal.node_text) for i in 1:n_ports]
+    text!(ax, port_x[1], y_port + 0.30; text="A", fontsize=9, align=(:center, :bottom), color=pal.muted)
+    text!(ax, port_x[end], y_port + 0.30; text="Sample", fontsize=9, align=(:center, :bottom),
+        color=pal.muted)
+    # The A side of the mixer: fed by the buffer valve, coloured by its active port.
+    vlv_poly = poly!(ax, rrect(x_vlv, y_buf, fitw("Buffer A", 1.3), box_h); color=tint(pal.buf_a),
+        strokecolor=pal.buf_a, strokewidth=1.5)
+    text!(ax, x_vlv, y_buf; text="Buffer A", fontsize=10,
+        align=(:center, :center), font=:bold, color=pal.node_text)
+    node!(x_frac, y_buf, 1.30, 0.62, "Buffer B"; color=tint(pal.buf_b, 0.35))
+    inj_poly = poly!(ax, diamond(x_c, y_inj, 2.3, 1.15); color=pal.node, strokecolor=pal.border,
+        strokewidth=1.5)
+    node!(x_c, y_col, 1.35, 0.74, "Column")
+    node!(x_c, y_uv, 1.48, 0.78, "UV / Cond")
+    out_poly = poly!(ax, diamond(x_c, y_out, 1.6, 1.0); color=pal.node, strokecolor=pal.border,
+        strokewidth=1.5)
+    node!(x_r, y_syr, 1.45, 0.62, "Syringe")
+    node!(x_r, y_loop, 1.20, 0.62, "Loop")
+    node!(x_frac, y_bottom, 1.25, 0.68, "Frac"; color=tint(pal.frac, 0.30))
+    node!(x_l, y_bottom, 1.30, 0.62, "Waste")
+    node!(x_r, y_waste_loop, 1.30, 0.62, "Waste")
+    node!(x_l, y_waste_inj, 1.30, 0.62, "Waste")
 
-    # ── MIXER — colour blends BufA→BufB by %B ────────────────────────────────
+    # ── MIXER — colour blends the A side (active port) with buffer B by %B ──
     mixer_color = @lift begin
         p = $point
         a = port_color($state.buffer_port)
         f = isnothing(p) ? 0.0 : clamp(p.pctb / 100.0, 0.0, 1.0)
-        RGBf((1 - f) * a.r + f * COL_BUF_B.r,
-            (1 - f) * a.g + f * COL_BUF_B.g,
-            (1 - f) * a.b + f * COL_BUF_B.b)
+        tint(RGBf((1 - f) * a.r + f * pal.buf_b.r, (1 - f) * a.g + f * pal.buf_b.g,
+            (1 - f) * a.b + f * pal.buf_b.b), 0.45)
     end
-    poly!(ax, Rect2f(x_c - 0.65, y_mix - 0.36, 1.30, 0.72);
-        color=mixer_color, strokecolor=:black, strokewidth=1)
-    mixer_label = @lift isnothing($point) ? "MIX" : @sprintf("%.0f%%B", $point.pctb)
-    text!(ax, x_c, y_mix; text=mixer_label, fontsize=11,
-        align=(:center, :center), font=:bold)
+    poly!(ax, rrect(x_c, y_mix, fitw("100 %B", 1.3), box_h); color=mixer_color,
+        strokecolor=pal.border, strokewidth=1.2)
+    mixer_label = @lift isnothing($point) ? "MIX" : @sprintf("%.0f %%B", $point.pctb)
+    text!(ax, x_c, y_mix; text=mixer_label, fontsize=11, align=(:center, :center), font=:bold,
+        color=pal.node_text)
 
-    inj_txt = text!(ax, x_c, y_inj; text="LOAD", fontsize=11,
-        align=(:center, :center), font=:bold, color=:black)
-    text!(ax, x_c, y_out; text="OUT", fontsize=11,
-        align=(:center, :center), font=:bold, color=:black)
-    out_txt = text!(ax, x_c, y_out - 0.95; text="TO WASTE", fontsize=11,
-        align=(:center, :center), font=:bold, color=:gray35)
+    inj_txt = text!(ax, x_c, y_inj; text="LOAD", fontsize=10,
+        align=(:center, :center), font=:bold, color=pal.node_text)
+    text!(ax, x_c, y_out; text="Out", fontsize=10,
+        align=(:center, :center), font=:bold, color=pal.node_text)
+    out_txt = text!(ax, x_c, y_out - 1.0; text="TO WASTE", fontsize=9,
+        align=(:center, :center), font=:bold, color=pal.muted)
 
     on(state) do s
         is_load = s.inject_value == IV_LOAD
@@ -1119,13 +1207,16 @@ function _draw_flow_schematic!(ax, state::Observable{InstrumentState},
         pcol = port_color(port)
         alpha = s.buffer_port_known ? 1.0 : 0.45
         for i in 1:n_ports
-            port_polys[i].color[] = i == port ? RGBAf(pcol.r, pcol.g, pcol.b, alpha) : RGBAf(0.92, 0.92, 0.92, 1)
-            setvisible!(ln_ports[i], has_known_path && i == port)
+            active = i == port
+            port_polys[i].color[] = active ? tint(pcol, alpha) : pal.node
+            port_polys[i].strokecolor[] = active ? pcol : pal.border
+            port_txt[i].color[] = active && s.buffer_port_known ? RGBf(1, 1, 1) : pal.node_text
+            setvisible!(ln_ports[i], has_known_path && active)
             ln_ports[i].alpha[] = alpha
         end
         ln_buf_a.color[] = RGBAf(pcol.r, pcol.g, pcol.b, alpha)
-        vlv_poly.color[] = RGBAf(pcol.r, pcol.g, pcol.b, alpha)
-        vlv_txt.text[] = s.buffer_port_known ? "BUFFER VALVE $port" : "BUFFER VALVE $port?"
+        vlv_poly.color[] = tint(pcol, 0.25 * alpha)
+        vlv_poly.strokecolor[] = tint(pcol, alpha)
         setvisible!(ln_buf_b, has_known_path)
         setvisible!(ln_mix_to_valve, has_known_path)
 
@@ -1145,11 +1236,13 @@ function _draw_flow_schematic!(ax, state::Observable{InstrumentState},
         setvisible!(ln_out_frac, has_known_path && out_to_frac)
         setvisible!(ln_out_waste, has_known_path && !out_to_frac)
 
-        inj_poly.color[] = is_unk ? :red :
-                           is_wst ? :gray60 :
-                           is_load ? :lightskyblue1 :
-                           is_inj ? :orange : :lightgray
-        out_poly.color[] = out_to_frac ? :lightgreen : :gray70
+        # Valves: soft tint of their state colour, outlined in it.
+        inj_col = is_unk ? pal.err : is_wst ? pal.muted : is_inj ? pal.warn : pal.accent
+        inj_poly.color[] = tint(inj_col)
+        inj_poly.strokecolor[] = inj_col
+        out_col = out_to_frac ? pal.frac : pal.muted
+        out_poly.color[] = tint(out_col)
+        out_poly.strokecolor[] = out_col
 
         inj_txt.text[] = _inject_label(s.inject_value)
         out_txt.text[] = is_unk ? "PATH UNKNOWN" :

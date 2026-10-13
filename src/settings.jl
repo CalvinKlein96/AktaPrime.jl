@@ -6,6 +6,8 @@ const VOLUME_UNIT_PREFERENCE_KEY = "volume_unit_uL"   # 10 for ÄKTAprime plus, 
 const DEMO_MODE_PREFERENCE_KEY = "demo_mode"
 const LOG_PREFIX_PREFERENCE_KEY = "log_prefix"
 const DATA_DIR_PREFERENCE_KEY = "data_dir"
+const DARK_MODE_PREFERENCE_KEY = "dark_mode"
+const REFRESH_PREFERENCE_KEY = "refresh_hz"
 
 mutable struct Settings
     demo_mode::Bool          # simulated data instead of the instrument
@@ -13,6 +15,8 @@ mutable struct Settings
     volume_unit_uL::Float64  # µL per volume count
     log_prefix::String       # CSV files are named <prefix>_<date>_<time>.csv
     data_dir::String         # folder for log files and plots; "" = current folder
+    dark_mode::Bool          # dark colour theme (applied at start)
+    refresh_hz::Float64      # live GUI refreshes per second
 end
 
 load_settings() = Settings(
@@ -21,6 +25,8 @@ load_settings() = Settings(
     Float64(@load_preference(VOLUME_UNIT_PREFERENCE_KEY, DEFAULT_VOLUME_UNIT_UL)),
     @load_preference(LOG_PREFIX_PREFERENCE_KEY, "akta"),
     @load_preference(DATA_DIR_PREFERENCE_KEY, ""),
+    @load_preference(DARK_MODE_PREFERENCE_KEY, false),
+    Float64(@load_preference(REFRESH_PREFERENCE_KEY, 2.0)),
 )
 
 # The data folder in use: the saved one if it exists or can be created, else
@@ -43,5 +49,7 @@ function save_settings(s::Settings)
         VOLUME_UNIT_PREFERENCE_KEY => s.volume_unit_uL,
         LOG_PREFIX_PREFERENCE_KEY => s.log_prefix,
         DATA_DIR_PREFERENCE_KEY => s.data_dir,
+        DARK_MODE_PREFERENCE_KEY => s.dark_mode,
+        REFRESH_PREFERENCE_KEY => s.refresh_hz,
     )
 end
