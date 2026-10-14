@@ -32,7 +32,7 @@ function _close_log!(app::AppState)
     close(app.csv_io)
     app.csv_io = nothing
     has_data = !isempty(app.trend_data[]) ||
-               any(e -> e.kind != EVT_CONNECT && !startswith(e.text, "Link:"), app.events[])
+               any(e -> e.kind ∉ (EVT_CONNECT, EVT_INFO) && !startswith(e.text, "Link:"), app.events[])
     if !has_data
         rm(app.log_filename; force=true)
         rm(raw; force=true)
@@ -49,6 +49,9 @@ function start!(acq::Acquisition)
     resetrun!(app)
     app.log_filename = _unique_logname(app)
     app.csv_io = init_csv(app.log_filename)
+    # Every log, including the new file started for each run, opens with the run information.
+    ON_NEW_LOG[] = a -> log_run_info!(a, s.run_info)
+    ON_NEW_LOG[](app)
     acq.shutdown = Ref(false)
 
     if s.demo_mode

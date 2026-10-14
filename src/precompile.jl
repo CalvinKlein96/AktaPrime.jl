@@ -19,13 +19,15 @@ using PrecompileTools: @setup_workload, @compile_workload
             ev(1.0, EVT_LOG, "Buffer Valve Pos 8")
             ev(2.0, EVT_LOG, "Injection Valve Inj")
 
-            acq = Acquisition(app, Settings(true, "", 1.0, "akta", "", false, 2.0))
+            acq = Acquisition(app, Settings(true, "", 1.0, "akta", "", false, 2.0,
+                Dict("Sample" => "Lysozyme", "Column volume (mL)" => "1.0", "Port 3" => "20 mM Tris")))
             ws = Workspace(acq)
             live = add_page!((topbar, on_screen) -> build_gui(app; topbar, on_screen, status=acq.status),
                 ws, "Live"; closable=false)
             add_page!((topbar, on_screen) -> build_gui(app; viewer=true, topbar, on_screen), ws, "run.csv")
             show_page!(ws, live)
             show_page!(ws, prepare_settings!(ws))
+            open_runinfo!(ws)
         end
     end
 end

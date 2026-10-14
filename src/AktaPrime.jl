@@ -15,6 +15,7 @@ include("csv_writer.jl")   # must come before protocol (push_event! calls write_
 include("method.jl")
 include("protocol.jl")
 include("settings.jl")
+include("runinfo.jl")
 include("theme.jl")
 include("gui.jl")
 include("acquisition.jl")

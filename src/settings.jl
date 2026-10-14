@@ -8,6 +8,7 @@ const LOG_PREFIX_PREFERENCE_KEY = "log_prefix"
 const DATA_DIR_PREFERENCE_KEY = "data_dir"
 const DARK_MODE_PREFERENCE_KEY = "dark_mode"
 const REFRESH_PREFERENCE_KEY = "refresh_hz"
+const RUN_INFO_PREFERENCE_KEY = "run_info"
 
 mutable struct Settings
     demo_mode::Bool          # simulated data instead of the instrument
@@ -17,6 +18,7 @@ mutable struct Settings
     data_dir::String         # folder for log files and plots; "" = current folder
     dark_mode::Bool          # dark colour theme (applied at start)
     refresh_hz::Float64      # live GUI refreshes per second
+    run_info::Dict{String,String}   # sample, column, buffer names… (runinfo.jl)
 end
 
 load_settings() = Settings(
@@ -27,6 +29,8 @@ load_settings() = Settings(
     @load_preference(DATA_DIR_PREFERENCE_KEY, ""),
     @load_preference(DARK_MODE_PREFERENCE_KEY, false),
     Float64(@load_preference(REFRESH_PREFERENCE_KEY, 2.0)),
+    Dict{String,String}(string(k) => string(v)
+                        for (k, v) in @load_preference(RUN_INFO_PREFERENCE_KEY, Dict{String,Any}())),
 )
 
 # The data folder in use: the saved one if it exists or can be created, else
@@ -51,5 +55,6 @@ function save_settings(s::Settings)
         DATA_DIR_PREFERENCE_KEY => s.data_dir,
         DARK_MODE_PREFERENCE_KEY => s.dark_mode,
         REFRESH_PREFERENCE_KEY => s.refresh_hz,
+        RUN_INFO_PREFERENCE_KEY => s.run_info,
     )
 end

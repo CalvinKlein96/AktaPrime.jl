@@ -2,7 +2,23 @@
 dark_mode = false
 data_dir = ""
 demo_mode = false
-log_prefix = "t"
-refresh_hz = 4.0
+log_prefix = "calvin"
+refresh_hz = 10.0
 serial_port = "/dev/ttyUSB0"
 volume_unit_uL = 1.0
+
+    [AktaPrime.run_info]
+    "Buffer B" = ""
+    Column = ""
+    "Column volume (mL)" = "1.0"
+    Notes = ""
+    "Port 1" = ""
+    "Port 2" = ""
+    "Port 3" = ""
+    "Port 4" = ""
+    "Port 5" = ""
+    "Port 6" = ""
+    "Port 7" = ""
+    "Port 8" = ""
+    Sample = ""
+    User = ""

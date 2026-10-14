@@ -45,7 +45,8 @@ function _topbar(ws::Workspace, listeners::Vector{Any})
         Label(bar[1, 2], ws.notice; halign=:right, fontsize=FS_BODY, color=ui().err,
             tellwidth=false)            # also pushes the menu buttons to the right edge
         open_btn = Button(bar[1, 3]; label="Open run…", fontsize=13)
-        set_btn = Button(bar[1, 4]; label="Settings", fontsize=13)
+        info_btn = Button(bar[1, 4]; label="Run info", fontsize=13)
+        set_btn = Button(bar[1, 5]; label="Settings", fontsize=13)
         colgap!(bar, 10)
 
         # Flat tabs: title (+ close ×) on the bar colour, the active one in bold
@@ -86,6 +87,7 @@ function _topbar(ws::Workspace, listeners::Vector{Any})
 
         on(_ -> _later(() -> open_run!(ws), ws), open_btn.clicks)
         on(_ -> _later(() -> open_settings!(ws), ws), set_btn.clicks)
+        on(_ -> _later(() -> open_runinfo!(ws), ws), info_btn.clicks)
     end
 end
 
@@ -148,6 +150,51 @@ const REFRESH_OPTIONS = ["1× per second", "2× per second", "4× per second", "
 _refresh_label(hz) = REFRESH_OPTIONS[something(findfirst(==(hz), REFRESH_HZ), 2)]
 
 const VOLUME_UNIT_OPTIONS = ["1 µL per count (ÄKTAprime)", "10 µL per count (ÄKTAprime plus)"]
+
+# ── Run info ─────────────────────────────────────────────────────────────────
+function open_runinfo!(ws::Workspace)
+    existing = findfirst(p -> p.title == "Run info", ws.pages)
+    isnothing(existing) || return show_page!(ws, ws.pages[existing])
+    show_page!(ws, add_page!((topbar, _) -> _runinfo_figure(ws, topbar), ws, "Run info"))
+end
+
+function _runinfo_figure(ws::Workspace, topbar)::Figure
+    acq, s = ws.acq, ws.acq.settings
+    fig = Figure(size=(1440, 900))
+    topbar(fig[1, 1])
+    g = GridLayout(fig[2, 1]; halign=:left, valign=:top, tellwidth=false, tellheight=false,
+        alignmode=Outside(40))
+    Label(g[1, 1:4], "Run info"; halign=:left, fontsize=20, font=:bold)
+    Label(g[2, 1:4], "Recorded in the log of the current run and kept for the next runs. " *
+                     "Name the buffers on the buffer valve ports you use.";
+        halign=:left, fontsize=FS_BODY, color=ui().muted)
+    boxes = Dict{String,Textbox}()
+    # Two columns: run details left, buffer names right.
+    left_fields = ["Sample", "User", "Column", "Column volume (mL)", "Buffer B", "Notes"]
+    right_fields = ["Port $i" for i in 1:8]
+    for (col, fields) in ((1, left_fields), (3, right_fields)), (r, key) in enumerate(fields)
+        Label(g[r+2, col], key == "Port 1" ? "Port 1 (A)" : key == "Port 8" ? "Port 8 (sample)" : key;
+            halign=:right, fontsize=FS_BODY)
+        boxes[key] = Textbox(g[r+2, col+1]; stored_string=get(s.run_info, key, ""),
+            placeholder=key == "Column volume (mL)" ? "e.g. 1.0" : "", width=key == "Notes" ? 420 : 260,
+            fontsize=FS_BODY, halign=:left)
+    end
+    save = Button(g[12, 2]; label="Save", fontsize=FS_BODY, halign=:left)
+    feedback = Label(g[13, 1:4], ""; halign=:left, fontsize=FS_BODY, color=ui().ok)
+    rowgap!(g, 10)
+    colgap!(g, 14)
+    colgap!(g, 2, 40)
+
+    on(save.clicks) do _
+        for (key, tb) in boxes
+            s.run_info[key] = strip(something(tb.displayed_string[], ""))
+        end
+        save_settings(s)
+        log_run_info!(acq.app, s.run_info; only_changed=true)
+        feedback.text = "Saved" * (isnothing(acq.app.csv_io) ? "." : " and recorded in $(basename(acq.app.log_filename)).")
+    end
+    return fig
+end
 
 # Builds the Settings page without showing it, so the first click is quick.
 function prepare_settings!(ws::Workspace)

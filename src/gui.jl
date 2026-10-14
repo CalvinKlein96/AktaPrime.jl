@@ -21,6 +21,7 @@ const EVT_COLORS = Dict(
     EVT_LOG => (:blue, :solid),
     EVT_CONNECT => (:green, :solid),
     EVT_DISCONNECT => (:red, :solid),
+    EVT_MARK => (:darkorange, :solid),
 )
 
 _inject_label(v::InjectValue) =
@@ -59,6 +60,8 @@ function _event_label_top(e::AktaEvent)::String
         end
         startswith(t, "Method start") && return "Method start"
         return length(t) > 20 ? first(t, 18) * "…" : t
+    elseif e.kind == EVT_MARK
+        return "Mark: " * (length(e.text) > 16 ? first(e.text, 15) * "…" : e.text)
     elseif e.kind == EVT_CONNECT
         return "CONNECT"
     elseif e.kind == EVT_DISCONNECT
@@ -67,11 +70,15 @@ function _event_label_top(e::AktaEvent)::String
     return string(e.kind)
 end
 
-_trend_x(p::TrendPoint, by_vol::Bool)::Float32 =
-    by_vol ? Float32(p.cum_vol_mL) : Float32(p.cum_time_ms / 60_000)
+# The x axis is set by a scale `xs`: 0 = time in min, otherwise volume divided by
+# `xs` — 1 for mL, the column volume for column volumes (CV).
+_x(time_ms::Real, vol_mL::Real, xs::Real)::Float32 =
+    xs == 0 ? Float32(time_ms / 60_000) : Float32(vol_mL / xs)
+_xlabel(xs::Real) = xs == 0 ? "Time (min)" : xs == 1 ? "Volume (mL)" : "Column volumes (CV)"
 
-_event_x(e::AktaEvent, by_vol::Bool)::Float32 =
-    by_vol ? Float32(e.cum_vol_mL) : Float32(e.cum_time_ms / 60_000)
+_trend_x(p::TrendPoint, xs::Real)::Float32 = _x(p.cum_time_ms, p.cum_vol_mL, xs)
+
+_event_x(e::AktaEvent, xs::Real)::Float32 = _x(e.cum_time_ms, e.cum_vol_mL, xs)
 
 # Set flow, as reported by the instrument's "Flow 1.0 ml/min" log messages.
 _flow_from_log(text::AbstractString)::Union{Nothing,Float64} =
@@ -82,15 +89,15 @@ _flow_from_log(text::AbstractString)::Union{Nothing,Float64} =
 # Step-plot points of the set flow: one per flow log event, with the last value
 # held up to the newest data point.
 function _flow_setpoints(events::AbstractVector{AktaEvent}, trend::AbstractVector{TrendPoint},
-    by_vol::Bool)::Vector{Point2f}
+    xs::Real)::Vector{Point2f}
     pts = Point2f[]
     for e in events
         e.kind == EVT_LOG || continue
         flow = _flow_from_log(e.text)
-        isnothing(flow) || push!(pts, Point2f(_event_x(e, by_vol), flow))
+        isnothing(flow) || push!(pts, Point2f(_event_x(e, xs), flow))
     end
     if !isempty(pts) && !isempty(trend)
-        xend = _trend_x(trend[end], by_vol)
+        xend = _trend_x(trend[end], xs)
         xend > pts[end][1] && push!(pts, Point2f(xend, pts[end][2]))
     end
     return pts
@@ -183,9 +190,9 @@ function _event_label_positions(xs::AbstractVector{<:Real}, labels::AbstractVect
     return pts
 end
 
-function _event_labels!(ax, evts, x_mode_is_vol; avoid=Observable(nothing))
+function _event_labels!(ax, evts, xscale; avoid=Observable(nothing))
     lbls = @lift [_event_label_top(e) for e in $evts]
-    pts = @lift _event_label_positions([_event_x(e, $x_mode_is_vol) for e in $evts], $lbls,
+    pts = @lift _event_label_positions([_event_x(e, $xscale) for e in $evts], $lbls,
         $(ax.finallimits), $(ax.scene.viewport).widths, $avoid)
     text!(ax, pts; text=lbls, fontsize=EVENT_LABEL_FONTSIZE, color=ui().muted,
         align=(:left, :top), xautolimits=false, yautolimits=false)
@@ -241,9 +248,11 @@ function _flow_at(events::AbstractVector{AktaEvent}, p::TrendPoint)
     return flow
 end
 
-# One-line valve summary for the flow-path card.
-function _valve_summary(s::InstrumentState)::String
-    port = s.buffer_port == 1 ? "1 (A)" : s.buffer_port == 8 ? "8 (sample)" : string(s.buffer_port)
+# One-line valve summary for the flow-path card; ports named in Run info show their buffer.
+function _valve_summary(s::InstrumentState, info::AbstractDict=Dict{String,String}())::String
+    name = get(info, "Port $(s.buffer_port)", "")
+    port = !isempty(name) ? "$(s.buffer_port) ($name)" :
+           s.buffer_port == 1 ? "1 (A)" : s.buffer_port == 8 ? "8 (sample)" : string(s.buffer_port)
     outlet = s.fraction_vol_mL > 0 ?
              "frac #$(s.fraction_number), $(@sprintf("%.2f", s.fraction_vol_mL)) mL" : "waste"
     return "Valve $(lowercase(_inject_label(s.inject_value))) · Buffer $port · Outlet $outlet"
@@ -304,22 +313,22 @@ end
 const DISPLAY_BINS = 1500
 
 # Index of the first point at or beyond x (x grows along the run).
-function _first_at_or_after(trend::AbstractVector{TrendPoint}, x::Real, by_vol::Bool)::Int
+function _first_at_or_after(trend::AbstractVector{TrendPoint}, x::Real, xs::Real)::Int
     lo, hi = 1, length(trend) + 1
     while lo < hi
         mid = (lo + hi) ÷ 2
-        _trend_x(trend[mid], by_vol) < x ? (lo = mid + 1) : (hi = mid)
+        _trend_x(trend[mid], xs) < x ? (lo = mid + 1) : (hi = mid)
     end
     return lo
 end
 
-function _display_points(trend::AbstractVector{TrendPoint}, gety, by_vol::Bool,
+function _display_points(trend::AbstractVector{TrendPoint}, gety, xs::Real,
     (xlo, xhi))::Vector{Point2f}
-    pt(i) = Point2f(_trend_x(trend[i], by_vol), gety(trend[i]))
+    pt(i) = Point2f(_trend_x(trend[i], xs), gety(trend[i]))
     n = length(trend)
     # The window, plus one point either side so lines run to the plot edges.
-    i0 = isinf(xlo) ? 1 : max(1, _first_at_or_after(trend, xlo, by_vol) - 1)
-    i1 = isinf(xhi) ? n : min(n, _first_at_or_after(trend, xhi, by_vol))
+    i0 = isinf(xlo) ? 1 : max(1, _first_at_or_after(trend, xlo, xs) - 1)
+    i1 = isinf(xhi) ? n : min(n, _first_at_or_after(trend, xhi, xs))
     i1 < i0 && return [pt(clamp(i0, 1, n))]
     m = i1 - i0 + 1
     m <= 2 * DISPLAY_BINS && return [pt(i) for i in i0:i1]
@@ -369,7 +378,7 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
     colsize!(body, 1, Relative(0.75))
     colsize!(body, 2, Relative(0.25))
 
-    x_mode_is_vol = Observable(false)
+    xscale = Observable(0.0)          # x axis: 0 time, 1 mL, column volume → CV (see _x)
 
     # ── Chromatogram axes (UV always shown; the rest are toggleable) ───────────
     ax_uv = Axis(left[1, 1]; ylabel="UV (AU)", ygridvisible=false, xgridvisible=false)
@@ -388,6 +397,11 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
     plot_axes = (ax_uv, ax_pctb, ax_cond, ax_ph, ax_pres, ax_rate, ax_ov)
 
     linkxaxes!(plot_axes...)
+    # Same fixed room for the y tick labels in every panel, so plots stay aligned
+    # and do not shift when the values (and so the tick label widths) change.
+    for ax in plot_axes
+        ax.yticklabelspace = 42.0
+    end
 
     # x label tracks the plotting mode; per-panel visibility is set by
     # refresh_panels! below so only the lowest visible panel carries it.
@@ -410,8 +424,8 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
     xwin = Observable((-Inf, Inf))
     # Downsampled trace for a panel; a hidden one gets a single point, not drawn.
     function trace(gety, key)
-        @lift $(panel_shown[key]) ? _display_points($_trend, gety, $x_mode_is_vol, $xwin) :
-              [Point2f(_trend_x($_trend[1], $x_mode_is_vol), gety($_trend[1]))]
+        @lift $(panel_shown[key]) ? _display_points($_trend, gety, $xscale, $xwin) :
+              [Point2f(_trend_x($_trend[1], $xscale), gety($_trend[1]))]
     end
     uv_pts = trace(p -> p.uv, :uv)
     cond_pts = trace(p -> p.cond_mScm, :cond)
@@ -419,7 +433,7 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
     pctb_pts = trace(p -> p.pctb, :pctb)
     pres_pts = trace(p -> p.pres_MPa, :pres)
     # Same empty-guard as _trend: a dummy point until the first flow message arrives.
-    rate_pts = @lift let pts = _flow_setpoints($(events_obs), $(trend_obs), $x_mode_is_vol)
+    rate_pts = @lift let pts = _flow_setpoints($(events_obs), $(trend_obs), $xscale)
         isempty(pts) ? [Point2f(0, 0)] : pts
     end
 
@@ -433,10 +447,11 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
     # ── Event vlines on UV panel ──────────────────────────────────────────────
     # xautolimits/yautolimits=false prevents Makie calling extrema on empty vectors.
     for kind in instances(EventKind)
+        kind == EVT_INFO && continue      # run documentation is listed in the run log, not drawn
         let kind = kind
             color, style = get(EVT_COLORS, kind, (:black, :dash))
             evts_k = @lift filter(e -> e.kind == kind, $(events_obs))
-            evt_x_k = @lift [_event_x(e, $x_mode_is_vol) for e in $evts_k]
+            evt_x_k = @lift [_event_x(e, $xscale) for e in $evts_k]
             for ax in (ax_uv, ax_ov)
                 vlines!(ax, evt_x_k; color=(color, 0.55), linestyle=style, linewidth=1.0,
                     xautolimits=false, yautolimits=false)
@@ -448,7 +463,7 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
     # Build starts/ends/colors from one observable to keep lengths in lockstep.
     fraction_spans = @lift begin
         fracs = $(fracs_obs)
-        by_vol = $x_mode_is_vol
+        xs = $xscale
 
         starts = Float64[]
         ends = Float64[]
@@ -457,12 +472,12 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
         labels = String[]
 
         for (i, f) in enumerate(fracs)
-            x0 = by_vol ? f.start_vol_mL : f.start_time_ms / 60_000
+            x0 = _x(f.start_time_ms, f.start_vol_mL, xs)
             x1 = if !isnothing(f.end_time_ms) && !isnothing(f.end_vol_mL)
-                by_vol ? something(f.end_vol_mL) : something(f.end_time_ms) / 60_000
+                _x(something(f.end_time_ms), something(f.end_vol_mL), xs)
             elseif !isempty($_trend)
                 p = $_trend[end]
-                by_vol ? p.cum_vol_mL : p.cum_time_ms / 60_000
+                _trend_x(p, xs)
             else
                 x0
             end
@@ -517,8 +532,8 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
         frac_vol_prev = 0.0
         frac_vol_idx = 0
         for e in events
-            if e.kind == EVT_TUBEFEED
-                continue  # Shown as vspans instead
+            if e.kind == EVT_TUBEFEED || e.kind == EVT_INFO
+                continue  # tube feeds are shown as spans, run information in the run log
             elseif e.kind == EVT_LOG && contains(e.text, "Fraction size")
                 frac_vol_idx += 1
                 frac_vol_current = frac_vol_idx <= length(frac_vol_states) ? frac_vol_states[frac_vol_idx] : 0.0
@@ -534,7 +549,7 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
         filtered
     end
 
-    _event_labels!(ax_uv, evt_other, x_mode_is_vol)
+    _event_labels!(ax_uv, evt_other, xscale)
 
     # ── Event legend ──────────────────────────────────────────────────────────
     # legend_elements = [LineElement(color=EVT_COLORS[k][1], linestyle=EVT_COLORS[k][2])
@@ -545,12 +560,12 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
     #     labelsize=11, patchsize=(18, 2))
 
     # ── Plot toolbar: x axis, stacked/overlay, visible panels, follow, export ──
-    xmenu = Menu(toolbar[1, 1]; options=["Plot vs time", "Plot vs volume"],
+    xmenu = Menu(toolbar[1, 1]; options=["Plot vs time", "Plot vs volume", "Plot vs column volumes"],
         default="Plot vs time", width=150, fontsize=13)
     ov_btn = Button(toolbar[1, 2]; label="Overlay", fontsize=13)
-    function check!(col, label)
+    function check!(col, label; checked=true)
         g = GridLayout(toolbar[1, col]; default_colgap=4)
-        cb = Checkbox(g[1, 1]; checked=true)
+        cb = Checkbox(g[1, 1]; checked)
         Label(g[1, 2], label; fontsize=13)
         return cb
     end
@@ -564,6 +579,22 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
     # as the user zooms or pans, so a zoomed view stays put while the run continues.
     tg_follow = check!(8, "Follow live")
     save_btn = Button(toolbar[1, 9]; label="Save plot…", fontsize=13)
+    tg_log = check!(10, "Run log"; checked=false)
+    # Event marks: type a note (optional) and press Mark or Enter; live runs only.
+    if !viewer
+        mark_txt = Textbox(toolbar[1, 11]; placeholder="Mark note…", width=150, fontsize=13)
+        mark_btn = Button(toolbar[1, 12]; label="Mark", fontsize=13)
+        function add_mark!()
+            note = strip(something(mark_txt.displayed_string[], ""))
+            note == strip(something(mark_txt.placeholder[], "")) && (note = "")
+            push_event!(app, EVT_MARK, isempty(note) ? "Mark" : String(note))
+            mark_txt.stored_string[] = ""
+            mark_txt.displayed_string[] = ""
+        end
+        on(_ -> add_mark!(), mark_btn.clicks)
+        # Enter in the note; clearing the box afterwards sets "" and must not mark again.
+        on(str -> isnothing(str) || isempty(str) || add_mark!(), mark_txt.stored_string)
+    end
     colgap!(toolbar, 14)
 
     # ── Shown moment: live, or a past moment picked with the time slider ──────
@@ -597,7 +628,13 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
     stat!(2, 1, "Run time", @lift(fmt("%.2f min", $shown_state.run_time_ms / 60_000)))
     stat!(2, 2, "Run volume", @lift(fmt("%.3f mL", $shown_state.run_vol_mL)))
     stat!(2, 3, "Set flow", @lift(fmt("%.2f mL/min", $shown_flow)))
+    # Run documentation (Run info), as recorded in this log.
+    info = @lift run_info($events_obs)
+    Label(run[3, 1:3], @lift(join(filter(!isempty, [get($info, "Sample", ""),
+            isempty(get($info, "Column", "")) ? "" : "Column " * $info["Column"]]), " · "));
+        halign=:left, fontsize=FS_SMALL + 1, color=pal.muted, tellwidth=false)
     colgap!(run, 18)
+    foreach(c -> colsize!(run, c, Relative(1 / 3)), 1:3)        # fixed columns: no shifting
     rowgap!(run, 8)
 
     # Readings: big numbers, named in their trace colour.
@@ -614,11 +651,12 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
         colgap!(g, 4)
     end
     colgap!(readings, 18)
+    foreach(c -> colsize!(readings, c, Relative(1 / 3)), 1:3)   # fixed columns: no shifting
     rowgap!(readings, 10)
 
     # Flow path: one-line valve summary above the schematic.
     path = card!(right[3, 1], "Flow path")
-    Label(path[1, 1], @lift(_valve_summary($shown_state)); halign=:left, fontsize=FS_SMALL + 1,
+    Label(path[1, 1], @lift(_valve_summary($shown_state, $info)); halign=:left, fontsize=FS_SMALL + 1,
         color=pal.muted, tellwidth=false)
     ax_flow = Axis(path[2, 1]; backgroundcolor=pal.panel,
         xgridvisible=false, ygridvisible=false,
@@ -648,21 +686,29 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
     # On switching time<->volume, relabel the x-axis and reset the limits to fit
     # the data in the new units (equivalent to a zoom reset). Live updates and
     # manual zooming continue to work normally afterwards.
-    on(xmenu.selection) do sel
-        by_vol = sel == "Plot vs volume"
-        x_mode_is_vol[] = by_vol
-        lbl = by_vol ? "Volume (mL)" : "Time (min)"
+    # Column volumes need the column volume from the run information (Run info);
+    # without it the axis falls back to mL and says so.
+    function apply_xmode!()
+        sel = xmenu.selection[]
+        cv = column_volume(run_info(events_obs[]))
+        xs = sel == "Plot vs time" ? 0.0 : sel == "Plot vs volume" || cv == 0 ? 1.0 : cv
+        lbl = _xlabel(xs) * (sel == "Plot vs column volumes" && cv == 0 ?
+                             " — set the column volume under Run info" : "")
         for ax in plot_axes
             ax.xlabel = lbl
         end
+        xs == xscale[] && return
+        xscale[] = xs
         tg_follow.checked[] = true   # notifies, so this also rescales
     end
+    on(_ -> apply_xmode!(), xmenu.selection)
+    on(_ -> xmenu.selection[] == "Plot vs column volumes" && apply_xmode!(), events_obs)
 
     # Save the currently displayed plot (visible panels, current limits) to PDF.
     fig_counter = Ref(0)
     on(save_btn.clicks) do _
         _save_plot_pdf(app, plot_axes,
-            (tg_pctb, tg_cond, tg_ph, tg_pres, tg_rate), x_mode_is_vol[], fig_counter;
+            (tg_pctb, tg_cond, tg_ph, tg_pres, tg_rate), xscale[], fig_counter;
             overlay=overlay[], highlighted=highlighted[])
     end
 
@@ -687,7 +733,7 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
         # Scaled to the whole run's range; computed only while the overlay is shown.
         norm = isnothing(gety) ? @lift(_normalise($rate_pts, key)) :
                @lift $(panel_shown[:ov]) ?
-                     _normalise(_display_points($_trend, gety, $x_mode_is_vol, $xwin), key;
+                     _normalise(_display_points($_trend, gety, $xscale, $xwin), key;
                          range=extrema(gety, $_trend)) : ov_dummy
         ov_ranges[key] = @lift $norm[2]
         ov_labels[key] = @lift _overlay_label(name, unit, $norm[2])
@@ -726,7 +772,7 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
         by = vp.origin[2] + vp.widths[2] - (bb.origin[2] + bb.widths[2])
         (bx, bx + bb.widths[1], by, by + bb.widths[2])
     end
-    _event_labels!(ax_ov, evt_other, x_mode_is_vol; avoid=legend_box)
+    _event_labels!(ax_ov, evt_other, xscale; avoid=legend_box)
 
     function style_legend!()
         for (key, btn) in legend_btns
@@ -868,12 +914,19 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
     # ── Status bar: connection · recording · mouse help ────────────────────────
     Box(fig[r+2, 1]; color=pal.panel, strokecolor=pal.border, cornerradius=6)
     statusbar = GridLayout(fig[r+2, 1]; alignmode=Outside(6), tellwidth=false)
+    # Every item has a fixed-width slot (chips sit at its left), so a changing
+    # text or a blinking chip never moves the others.
     col = 0
+    function slot!(width)
+        g = GridLayout(statusbar[1, col += 1]; halign=:left)
+        colsize!(statusbar, col, Fixed(width))
+        return g
+    end
     if !isnothing(status)
         # Connection chip: green connected, amber waiting, red port missing, blue demo.
-        chip!(statusbar[1, col+=1], @lift(replace($status, "● " => "")), @lift(status_color($status)))
+        chip!(slot!(330)[1, 1], @lift(replace($status, "● " => "")), @lift(status_color($status)))
         demo = @lift startswith($status, "Demo")
-        chip!(statusbar[1, col+=1], @lift($demo ? "DEMO" : ""),
+        chip!(slot!(56)[1, 1], @lift($demo ? "DEMO" : ""),
             @lift($demo ? pal.demo : RGBAf(0, 0, 0, 0)))
     end
     recording = @lift begin
@@ -892,9 +945,10 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
     is_rec = @lift !viewer && !isnothing(app.csv_io) && $recording != "Not recording"
     # REC chip with a blinking dot while writing a log.
     blink = Observable(true)
-    chip!(statusbar[1, col+=1], @lift($is_rec ? ($blink ? "● REC" : "   REC") : "NOT RECORDING"),
-        @lift($is_rec ? pal.rec : pal.faint))
-    Label(statusbar[1, col+=1], recording; halign=:left, fontsize=FS_SMALL + 1, color=pal.muted)
+    # REC chip blinks by fading its colour; the text (and so its width) stays the same.
+    chip!(slot!(120)[1, 1], @lift($is_rec ? "● REC" : "NOT RECORDING"),
+        @lift(RGBAf($is_rec ? pal.rec : pal.faint, $is_rec && !$blink ? 0.45 : 1.0)))
+    Label(slot!(380)[1, 1], recording; halign=:left, fontsize=FS_SMALL + 1, color=pal.muted)
     Label(statusbar[1, col+=1], "Drag: zoom · Right-drag: pan · Ctrl-click: reset · Alt/Shift-click: inspect moment";
         halign=:right, fontsize=FS_SMALL, color=pal.muted, tellwidth=false)
     colgap!(statusbar, 10)
@@ -954,7 +1008,7 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
     marker_x = @lift begin
         td = $(trend_obs)
         $following || isempty(td) ? Float32[] :
-            [_trend_x(td[clamp($(sel_slider.value), 1, length(td))], $x_mode_is_vol)]
+            [_trend_x(td[clamp($(sel_slider.value), 1, length(td))], $xscale)]
     end
     for ax in plot_axes
         vlines!(ax, marker_x; color=(ui().text, 0.6), linestyle=:dash, linewidth=1.5,
@@ -966,9 +1020,123 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
                            Keyboard.right_shift) || return Consume(false)
             td = app.trend_data[]
             isempty(td) && return Consume(false)
-            xs = _trend_x.(td, x_mode_is_vol[])
+            xs = _trend_x.(td, xscale[])
             set_close_to!(sel_slider, argmin(abs.(xs .- event.data[1])))
             return Consume(true)
+        end
+    end
+
+    # ── Run log: every event as a list below the slider ────────────────────────
+    # Filter by text, scroll with the wheel, click a line to inspect that moment.
+    logpane = GridLayout(left[9, 1]; tellwidth=false)
+    log_blocks = Any[]
+    log_listeners = Any[]
+    LOG_ROWS = 10
+    function open_log!()
+        filt = Textbox(logpane[1, 1]; placeholder="Filter the run log…", width=260, fontsize=13,
+            halign=:left, tellwidth=false)      # the list below sets the width, not the box
+        lax = Axis(logpane[2, 1]; height=LOG_ROWS * 17 + 8, backgroundcolor=pal.panel,
+            limits=(0, 100, nothing, nothing), leftspinevisible=false, bottomspinevisible=false)
+        hidedecorations!(lax)
+        for name in (:rectanglezoom, :dragpan, :limitreset, :scrollzoom)
+            deregister_interaction!(lax, name)
+        end
+        append!(log_blocks, (filt, lax))
+        query = Observable("")
+        push!(log_listeners, on(str -> query[] = lowercase(strip(something(str, ""))), filt.displayed_string))
+        rows = lift(events_obs, query) do evts, q
+            filter(e -> isempty(q) || occursin(q, lowercase(e.text)) ||
+                        occursin(q, lowercase(string(e.kind))), evts)
+        end
+        push!(log_listeners, rows.inputs...)
+        kind_name(k) = replace(string(k), "EVT_" => "")
+        kind_col(k) = k == EVT_MARK ? :darkorange : k == EVT_INFO ? pal.muted : pal.text
+        cols = ((1, e -> @sprintf("%.2f min", e.cum_time_ms / 60_000), e -> pal.muted),
+            (10, e -> @sprintf("%.3f mL", e.cum_vol_mL), e -> pal.muted),
+            (19, e -> kind_name(e.kind), e -> kind_col(e.kind)),
+            (29, e -> e.text, e -> kind_col(e.kind)))
+        for (x, txt, col) in cols
+            text!(lax, @lift([Point2f(x, -k) for k in eachindex($rows)]);
+                text=@lift([txt(e) for e in $rows]), color=@lift([col(e) for e in $rows]),
+                fontsize=12, align=(:left, :center))
+        end
+        # Scroll position: first visible row; follows the newest event when at the end.
+        top = Observable(1)
+        last_top(n) = max(1, n - LOG_ROWS + 1)
+        push!(log_listeners, on(top) do t
+            ylims!(lax, -(t + LOG_ROWS - 1) - 0.5, -t + 0.5)
+        end)
+        at_end = Ref(true)
+        push!(log_listeners, on(rows) do r
+            at_end[] && (top[] = last_top(length(r)))
+        end)
+        top[] = last_top(length(rows[]))
+        register_interaction!(lax, :scroll_log) do event, _
+            event isa ScrollEvent || return Consume(false)
+            n = length(rows[])
+            top[] = clamp(top[] - round(Int, 3 * sign(event.y)), 1, last_top(n))
+            at_end[] = top[] == last_top(n)
+            return Consume(true)
+        end
+        register_interaction!(lax, :inspect_log) do event, _
+            event isa MouseEvent && event.type == MouseEventTypes.leftclick || return Consume(false)
+            k = round(Int, -event.data[2])
+            r = rows[]
+            (1 <= k <= length(r) && !isempty(app.trend_data[])) || return Consume(false)
+            # the trend point at (or just after) the event's time
+            i = _first_at_or_after(app.trend_data[], r[k].cum_time_ms / 60_000, 0.0)
+            set_close_to!(sel_slider, clamp(i, 1, length(app.trend_data[])))
+            return Consume(true)
+        end
+    end
+    function close_log!()
+        foreach(off, log_listeners)
+        empty!(log_listeners)
+        foreach(delete!, log_blocks)
+        empty!(log_blocks)
+        trim!(logpane)
+    end
+    on(checked -> checked ? open_log!() : close_log!(), tg_log.checked)
+
+    # ── Hover readout: values under the mouse in every panel ──────────────────
+    hover_x = Observable(Float32[])
+    tips = Dict{Any,Any}()
+    for ax in plot_axes
+        vlines!(ax, hover_x; color=(pal.muted, 0.6), linewidth=1, xautolimits=false, yautolimits=false)
+        tips[ax] = tooltip!(ax, Point2f(0, 0); text="", visible=false, fontsize=FS_SMALL + 1,
+            backgroundcolor=pal.panel, textcolor=pal.text, outline_color=pal.border,
+            outline_linewidth=1, placement=:right, triangle_size=6)
+    end
+    function hover!(ax, x, y)
+        td = app.trend_data[]
+        isempty(td) && return
+        xs = xscale[]
+        i = clamp(_first_at_or_after(td, x, xs), 1, length(td))
+        i > 1 && abs(_trend_x(td[i-1], xs) - x) < abs(_trend_x(td[i], xs) - x) && (i -= 1)
+        p = td[i]
+        hover_x[] = [_trend_x(p, xs)]
+        tip = tips[ax]
+        tip[1][] = Point2f(x, y)
+        tip.text[] = @sprintf("%.2f min · %.3f mL\nUV %.4f AU   %%B %.1f\nCond %.2f mS/cm   pH %.2f\nPressure %.3f MPa",
+            p.cum_time_ms / 60_000, p.cum_vol_mL, p.uv, p.pctb, p.cond_mScm, p.ph, p.pres_MPa)
+        tip.placement[] = x > (ax.finallimits[].origin[1] + ax.finallimits[].widths[1] / 2) ? :left : :right
+        for (a, t) in tips
+            t.visible[] == (a === ax) || (t.visible[] = a === ax)
+        end
+    end
+    function unhover!()
+        isempty(hover_x[]) && return
+        hover_x[] = Float32[]
+        foreach(t -> t.visible[] && (t.visible[] = false), values(tips))
+    end
+    on(events(fig).mouseposition) do _
+        ax = findfirst(a -> a.leftspinevisible[] && is_mouseinside(a.scene), collect(plot_axes))
+        if isnothing(ax)
+            unhover!()
+        else
+            a = plot_axes[ax]
+            mp = mouseposition(a.scene)
+            hover!(a, mp[1], mp[2])
         end
     end
 
@@ -991,19 +1159,19 @@ _channel_value(p::TrendPoint, chan::Symbol)::Float64 =
 
 # Shade fraction-collection spans (and optionally number them) on a static axis.
 function _draw_fraction_spans!(ax, fracs::Vector{Fraction}, trend::Vector{TrendPoint},
-    by_vol::Bool; labels::Bool=false)
+    xs::Real; labels::Bool=false)
     isempty(fracs) && return
     lastx = isempty(trend) ? 0.0 :
-            (by_vol ? trend[end].cum_vol_mL : trend[end].cum_time_ms / 60_000)
+            _trend_x(trend[end], xs)
     starts = Float64[]
     ends = Float64[]
     cols = RGBf[]
     lblpts = Point2f[]
     lbls = String[]
     for (i, f) in enumerate(fracs)
-        x0 = by_vol ? f.start_vol_mL : f.start_time_ms / 60_000
+        x0 = _x(f.start_time_ms, f.start_vol_mL, xs)
         x1 = if !isnothing(f.end_time_ms) && !isnothing(f.end_vol_mL)
-            by_vol ? f.end_vol_mL : f.end_time_ms / 60_000
+            _x(f.end_time_ms, f.end_vol_mL, xs)
         else
             lastx
         end
@@ -1025,7 +1193,7 @@ end
 # Render the currently displayed chromatogram (only the visible panels, with the
 # current axis limits) to a PDF via CairoMakie.  Files are numbered per session:
 # <prefix>_<date>_<time>_figure_N.pdf
-function _save_plot_pdf(app::AppState, axes, toggles, by_vol::Bool, counter::Ref{Int};
+function _save_plot_pdf(app::AppState, axes, toggles, xs::Real, counter::Ref{Int};
     overlay::Bool=false, highlighted::Union{Nothing,Symbol}=nothing)
     trend = copy(app.trend_data[])
     if isempty(trend)
@@ -1047,7 +1215,7 @@ function _save_plot_pdf(app::AppState, axes, toggles, by_vol::Bool, counter::Ref
 
     xr = ax_uv.finallimits[]
     xlo, xhi = xr.origin[1], xr.origin[1] + xr.widths[1]
-    xlab = by_vol ? "Volume (mL)" : "Time (min)"
+    xlab = _xlabel(xs)
 
     # Both views on one page: the stacked panels, then the overlay below them.
     # The overlay keeps its on-screen y-range only when it is the view being shown.
@@ -1056,8 +1224,8 @@ function _save_plot_pdf(app::AppState, axes, toggles, by_vol::Bool, counter::Ref
     # Paper is white: the export always uses the light theme, even in dark mode.
     expfig = with_theme(makie_theme(LIGHT)) do
         f = Figure(size=(1000, 200 * length(specs) + 500), backgroundcolor=:white)
-        _stacked_export!(f[1, 1], trend, events, fracs, specs, by_vol, xlab, (xlo, xhi))
-        _overlay_export!(f[2, 1], trend, events, fracs, specs, by_vol, xlab, (xlo, xhi),
+        _stacked_export!(f[1, 1], trend, events, fracs, specs, xs, xlab, (xlo, xhi))
+        _overlay_export!(f[2, 1], trend, events, fracs, specs, xs, xlab, (xlo, xhi),
             ov_ylims, highlighted)
         rowsize!(f.layout, 2, Relative(500 / (200 * length(specs) + 500)))
         f
@@ -1081,12 +1249,12 @@ function _save_plot_pdf(app::AppState, axes, toggles, by_vol::Bool, counter::Ref
 end
 
 # Data points of one channel for export, in the current x units.
-_export_points(chan::Symbol, trend, events, by_vol::Bool)::Vector{Point2f} =
-    chan === :flow ? _flow_setpoints(events, trend, by_vol) :
-    [Point2f(_trend_x(p, by_vol), _channel_value(p, chan)) for p in trend]
+_export_points(chan::Symbol, trend, events, xs::Real)::Vector{Point2f} =
+    chan === :flow ? _flow_setpoints(events, trend, xs) :
+    [Point2f(_trend_x(p, xs), _channel_value(p, chan)) for p in trend]
 
 # Stacked export: one panel per visible channel, each with its on-screen y-limits.
-function _stacked_export!(pos, trend, events, fracs, specs, by_vol::Bool, xlab, (xlo, xhi))
+function _stacked_export!(pos, trend, events, fracs, specs, xs::Real, xlab, (xlo, xhi))
     grid = GridLayout(pos)
     exaxes = Axis[]
     for (i, (srcax, chan, ylab, col)) in enumerate(specs)
@@ -1094,14 +1262,14 @@ function _stacked_export!(pos, trend, events, fracs, specs, by_vol::Bool, xlab, 
         ax = Axis(grid[i, 1]; ylabel=ylab, xlabel=(bottom ? xlab : ""),
             xgridvisible=false, ygridvisible=false, xticklabelsvisible=bottom)
         (chan === :uv || chan === :pctb) &&
-            _draw_fraction_spans!(ax, fracs, trend, by_vol; labels=(chan === :pctb))
+            _draw_fraction_spans!(ax, fracs, trend, xs; labels=(chan === :pctb))
         if chan === :uv
             for e in events
                 c, style = get(EVT_COLORS, e.kind, (:black, :dash))
-                vlines!(ax, [_event_x(e, by_vol)]; color=(c, 0.55), linestyle=style, linewidth=1.0)
+                vlines!(ax, [_event_x(e, xs)]; color=(c, 0.55), linestyle=style, linewidth=1.0)
             end
         end
-        pts = _export_points(chan, trend, events, by_vol)
+        pts = _export_points(chan, trend, events, xs)
         if chan === :flow
             isempty(pts) || stairs!(ax, pts; step=:post, color=col, linewidth=1.5)
         else
@@ -1118,19 +1286,19 @@ end
 
 # Overlay export: every visible channel on one axis scaled to 0–100 %, with the
 # on-screen highlight (y-axis in its units) and a legend giving each trace's range.
-function _overlay_export!(pos, trend, events, fracs, specs, by_vol::Bool, xlab,
+function _overlay_export!(pos, trend, events, fracs, specs, xs::Real, xlab,
     (xlo, xhi), (ylo, yhi), highlighted)
     ax = Axis(pos; xlabel=xlab, xgridvisible=false, ygridvisible=false)
     _set_overlay_yaxis!(ax, nothing; p=LIGHT)
-    _draw_fraction_spans!(ax, fracs, trend, by_vol)
+    _draw_fraction_spans!(ax, fracs, trend, xs)
     for e in events
         c, style = get(EVT_COLORS, e.kind, (:black, :dash))
-        vlines!(ax, [_event_x(e, by_vol)]; color=(c, 0.55), linestyle=style, linewidth=1.0)
+        vlines!(ax, [_event_x(e, xs)]; color=(c, 0.55), linestyle=style, linewidth=1.0)
     end
     names = Dict(:uv => ("UV", "AU"), :pctb => ("%B", "%"), :cond => ("Cond", "mS/cm"),
         :ph => ("pH", ""), :pres => ("Pressure", "MPa"), :flow => ("Flow", "mL/min"))
     for (_, chan, _, col) in specs
-        pts = _export_points(chan, trend, events, by_vol)
+        pts = _export_points(chan, trend, events, xs)
         isempty(pts) && continue
         scaled, range = _normalise(pts, chan)
         dim = !isnothing(highlighted) && highlighted !== chan

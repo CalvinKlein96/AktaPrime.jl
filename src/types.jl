@@ -29,6 +29,8 @@ end
     EVT_TUBEFEED
     EVT_LOG
     EVT_STEP
+    EVT_MARK     # user event mark, added during a run
+    EVT_INFO     # run documentation ("Sample: …", "Port 3: …"), not drawn in plots
 end
 
 @enum InjectValue begin
