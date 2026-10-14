@@ -128,7 +128,7 @@ end
 function open_run!(ws::Workspace)
     ws.notice[] = ""
     path = NativeFileDialog.pick_file(data_dir(ws.acq.settings); filterlist="csv")
-    @info "File dialog returned: $(repr(path))"
+    @debug "File dialog returned: $(repr(path))"
     isempty(path) && return
     isfile(path) || error("$path is not a file")
     title = basename(path)
