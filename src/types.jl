@@ -140,7 +140,7 @@ function update_fraction_state!(app::AppState)::Bool
         push!(fracs, frac)
         inst.current_fraction_idx = length(fracs)
         changed = true
-        @info "Started fraction #$(inst.fraction_number) at t=$(inst.cum_time_ms/1000)s v=$(inst.cum_vol_mL)mL"
+        @debug "Started fraction #$(inst.fraction_number) at t=$(inst.cum_time_ms/1000)s v=$(inst.cum_vol_mL)mL"
 
     elseif collecting && !isnothing(inst.current_fraction_idx)
         idx = inst.current_fraction_idx
@@ -156,7 +156,7 @@ function update_fraction_state!(app::AppState)::Bool
                     inst.cum_time_ms,
                     inst.cum_vol_mL
                 )
-                @info "Stopped fraction #$(current.fraction_number) at t=$(inst.cum_time_ms/1000)s v=$(inst.cum_vol_mL)mL"
+                @debug "Stopped fraction #$(current.fraction_number) at t=$(inst.cum_time_ms/1000)s v=$(inst.cum_vol_mL)mL"
 
                 # Start new fraction
                 frac = Fraction(
@@ -168,7 +168,7 @@ function update_fraction_state!(app::AppState)::Bool
                 )
                 push!(fracs, frac)
                 inst.current_fraction_idx = length(fracs)
-                @info "Started fraction #$(inst.fraction_number) at t=$(inst.cum_time_ms/1000)s v=$(inst.cum_vol_mL)mL"
+                @debug "Started fraction #$(inst.fraction_number) at t=$(inst.cum_time_ms/1000)s v=$(inst.cum_vol_mL)mL"
                 changed = true
             end
         end
@@ -185,7 +185,7 @@ function update_fraction_state!(app::AppState)::Bool
                 inst.cum_time_ms,
                 inst.cum_vol_mL
             )
-            @info "Stopped fraction #$(current.fraction_number) at t=$(inst.cum_time_ms/1000)s v=$(inst.cum_vol_mL)mL"
+            @debug "Stopped fraction #$(current.fraction_number) at t=$(inst.cum_time_ms/1000)s v=$(inst.cum_vol_mL)mL"
         end
         inst.current_fraction_idx = nothing
         changed = true

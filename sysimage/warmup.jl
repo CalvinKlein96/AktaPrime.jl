@@ -40,7 +40,8 @@ frame() = Makie.colorbuffer(ws.screen)
 frame()
 
 find(T, pred=_ -> true) = fig.content[findfirst(c -> c isa T && pred(c), fig.content)]
-checks = [c for c in fig.content if c isa Checkbox]
+checks = [c for c in fig.content if c isa Checkbox]   # Show log, %B, Cond, pH, Pressure, Flow, Follow live
+logbox, followbox = checks[1], checks[7]
 for _ in 1:3                                           # live refreshes
     push!(app.trend_data[], app.trend_data[][end]); notify(app.trend_data); notify(app.inst)
     sleep(0.6); frame()
@@ -48,8 +49,8 @@ end
 slider = find(Slider); set_close_to!(slider, 1000); frame(); set_close_to!(slider, length(slider.range[])); frame()
 ax = find(Axis, a -> a.ylabel[] == "UV (AU)")
 xlims!(ax, 1, 3); frame()
-checks[6].checked[] = false; checks[6].checked[] = true; frame()          # follow live
-checks[1].checked[] = false; frame(); checks[1].checked[] = true; frame() # panel toggle
+followbox.checked[] = false; followbox.checked[] = true; frame()          # follow live
+checks[2].checked[] = false; frame(); checks[2].checked[] = true; frame() # panel toggle
 menu = find(Menu)
 for sel in ("Plot vs volume", "Plot vs column volumes", "Plot vs time"); menu.selection[] = sel; frame(); end
 vp = ax.scene.viewport[]
@@ -58,7 +59,7 @@ events(fig).mouseposition[] = (1.0, 1.0); frame()
 ovb = find(Button, b -> b.label[] == "Overlay"); ovb.clicks[] += 1; frame()
 find(Button, b -> startswith(b.label[], "━━")).clicks[] += 1; frame()
 ovb.clicks[] += 1; frame()
-checks[7].checked[] = true; frame(); checks[7].checked[] = false; frame()  # run log
+logbox.checked[] = true; frame(); logbox.checked[] = false; frame()  # run log
 find(Button, b -> b.label[] == "Save plot…").clicks[] += 1                # PDF export (into dir)
 
 # other pages: Settings, Run info, an opened run

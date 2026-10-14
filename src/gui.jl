@@ -376,7 +376,8 @@ end
 # build_gui — construct the Figure and wire all Observables
 # ─────────────────────────────────────────────────────────────────────────────
 function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
-    status::Union{Nothing,Observable{String}}=nothing, on_screen::Observable{Bool}=Observable(true))::Figure
+    status::Union{Nothing,Observable{String}}=nothing, on_screen::Observable{Bool}=Observable(true),
+    start_panels::AbstractVector{<:AbstractString}=ALL_PANELS)::Figure
     fig = Figure(size=(1440, 900))      # colours and fonts from the theme (theme.jl)
     fig.layout.block_updates = true     # one layout solve once the page is built
     pal = ui()                          # palette; not `p`, which closures below use for points
@@ -425,6 +426,16 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
     # and do not shift when the values (and so the tick label widths) change.
     for ax in plot_axes
         ax.yticklabelspace = 42.0
+    end
+    # Panel names sit inside each panel (top right) instead of rotated axis titles,
+    # which overlap once panels get short (small window, run log open); and fewer
+    # tick labels, so they do not crowd either.
+    for (ax, name, col) in ((ax_uv, "UV (AU)", pal.uv), (ax_pctb, "%B", pal.pctb),
+        (ax_cond, "Cond (mS/cm)", pal.cond), (ax_ph, "pH", pal.ph), (ax_pres, "Pressure (MPa)", pal.pres),
+        (ax_rate, "Flow (mL/min)", pal.flow))
+        text!(ax, Point2f(0.995, 0.96); text=name, space=:relative, align=(:right, :top),
+            fontsize=FS_SMALL + 1, font=:bold, color=col, xautolimits=false, yautolimits=false)
+        ax.yticks = WilkinsonTicks(3; k_min=2, k_max=4)
     end
 
     # x label tracks the plotting mode; per-panel visibility is set by
@@ -583,31 +594,34 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
     #     orientation=:horizontal, framevisible=false, tellwidth=false,
     #     labelsize=11, patchsize=(18, 2))
 
-    # ── Plot toolbar: x axis, stacked/overlay, visible panels, follow, export ──
-    xmenu = Menu(toolbar[1, 1]; options=["Plot vs time", "Plot vs volume", "Plot vs column volumes"],
+    # ── Plot toolbar: two groups — view controls, and which panels are shown.
+    # In a narrow window the panel group moves to a second row (see respond!).
+    tb_view = GridLayout(toolbar[1, 1]; halign=:left, default_colgap=14)
+    tb_panels = GridLayout(toolbar[1, 2]; halign=:left, default_colgap=14)
+    xmenu = Menu(tb_view[1, 1]; options=["Plot vs time", "Plot vs volume", "Plot vs column volumes"],
         default="Plot vs time", width=150, fontsize=13)
-    ov_btn = Button(toolbar[1, 2]; label="Overlay", fontsize=13)
-    function check!(col, label; checked=true)
-        g = GridLayout(toolbar[1, col]; default_colgap=4)
+    ov_btn = Button(tb_view[1, 2]; label="Overlay", fontsize=13)
+    function check!(layout, col, label; checked=true)
+        g = GridLayout(layout[1, col]; default_colgap=4)
         cb = Checkbox(g[1, 1]; checked)
         Label(g[1, 2], label; fontsize=13)
         return cb
     end
-    # UV is always shown; these switch the other panels.
-    tg_pctb = check!(3, "%B")
-    tg_cond = check!(4, "Cond")
-    tg_ph = check!(5, "pH")
-    tg_pres = check!(6, "Pressure")
-    tg_rate = check!(7, "Flow")
+    save_btn = Button(tb_view[1, 3]; label="Save plot…", fontsize=13)
+    tg_log = check!(tb_view, 4, "Show log"; checked=false)
+    # UV is always shown; these switch the other panels (start state: Settings).
+    tg_pctb = check!(tb_panels, 1, "%B"; checked="%B" in start_panels)
+    tg_cond = check!(tb_panels, 2, "Cond"; checked="Cond" in start_panels)
+    tg_ph = check!(tb_panels, 3, "pH"; checked="pH" in start_panels)
+    tg_pres = check!(tb_panels, 4, "Pressure"; checked="Pressure" in start_panels)
+    tg_rate = check!(tb_panels, 5, "Flow"; checked="Flow" in start_panels)
     # Follow live: auto-rescale to all data on each update. Switched off as soon
     # as the user zooms or pans, so a zoomed view stays put while the run continues.
-    tg_follow = check!(8, "Follow live")
-    save_btn = Button(toolbar[1, 9]; label="Save plot…", fontsize=13)
-    tg_log = check!(10, "Run log"; checked=false)
+    tg_follow = check!(tb_panels, 6, "Follow live")
     # Event marks: type a note (optional) and press Mark or Enter; live runs only.
     if !viewer
-        mark_txt = Textbox(toolbar[1, 11]; placeholder="Mark note…", width=150, fontsize=13)
-        mark_btn = Button(toolbar[1, 12]; label="Mark", fontsize=13)
+        mark_txt = Textbox(tb_view[1, 5]; placeholder="Mark note…", width=150, fontsize=13)
+        mark_btn = Button(tb_view[1, 6]; label="Mark", fontsize=13)
         function add_mark!()
             note = strip(something(mark_txt.displayed_string[], ""))
             note == strip(something(mark_txt.placeholder[], "")) && (note = "")
@@ -619,7 +633,7 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
         # Enter in the note; clearing the box afterwards sets "" and must not mark again.
         on(str -> isnothing(str) || isempty(str) || add_mark!(), mark_txt.stored_string)
     end
-    colgap!(toolbar, 14)
+    colgap!(toolbar, 28)
 
     # ── Shown moment: live, or a past moment picked with the time slider ──────
     # The status text and schematic show `shown_state` / `shown_point`: the live
@@ -668,10 +682,10 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
         ("Cond", "mS/cm", :cond_mScm, "%.2f", pal.cond), ("pH", "", :ph, "%.2f", pal.ph),
         ("Pressure", "MPa", :pres_MPa, "%.3f", pal.pres), ("Temp", "°C", :temp_degC, "%.1f", pal.muted)))
         g = GridLayout(readings[(i - 1) ÷ 3 + 1, (i - 1) % 3 + 1]; halign=:left, default_rowgap=0)
-        Label(g[1, 1:2], name; halign=:left, fontsize=FS_SMALL, font=:bold, color=col)
+        Label(g[1, 1:2], isempty(unit) ? name : "$name · $unit"; halign=:left, fontsize=FS_SMALL,
+            font=:bold, color=col)
         Label(g[2, 1], @lift(isnothing($shown_point) ? "—" : fmt(f, getfield($shown_point, key)));
             halign=:left, fontsize=FS_READING, font=:bold)
-        Label(g[2, 2], unit; halign=:left, valign=:bottom, fontsize=FS_SMALL, color=pal.muted)
         colgap!(g, 4)
     end
     colgap!(readings, 18)
@@ -786,18 +800,12 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
 
     # Legend: one button per visible trace, inside the top-left of the overlay axis.
     # Rebuilt whenever the visible traces change.
-    legend = GridLayout(left[7, 1]; tellwidth=false, tellheight=false,
-        halign=:left, valign=:top, alignmode=Outside(8), default_rowgap=3)
+    # The legend is a row of buttons above the overlay plot (in the space on top of
+    # its cell), so it never covers data.
+    legend = GridLayout(left[7, 1, Top()]; tellwidth=false, halign=:left,
+        alignmode=Outside(0, 0, 6, 0), default_colgap=6, default_rowgap=4)
     legend_btns = Pair{Symbol,Button}[]
-
-    # Overlay event labels go around the legend: its box in the axis' pixel space,
-    # as (left, right, top, bottom) with top/bottom measured down from the top edge.
-    legend_box = @lift let bb = $(legend.layoutobservables.computedbbox), vp = $(ax_ov.scene.viewport)
-        bx = bb.origin[1] - vp.origin[1]
-        by = vp.origin[2] + vp.widths[2] - (bb.origin[2] + bb.widths[2])
-        (bx, bx + bb.widths[1], by, by + bb.widths[2])
-    end
-    _event_labels!(ax_ov, evt_other, xscale; avoid=legend_box)
+    _event_labels!(ax_ov, evt_other, xscale)
 
     function style_legend!()
         for (key, btn) in legend_btns
@@ -814,7 +822,9 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
         overlay[] || return
         for (key, _, _, col, _, tg) in ov_channels
             (isnothing(tg) || tg.checked[]) || continue
-            btn = Button(legend[length(legend_btns)+1, 1]; label=ov_labels[key],
+            n = length(legend_btns)
+            ncol = left.layoutobservables.computedbbox[].widths[1] >= 1000 ? 6 : 3
+            btn = Button(legend[n ÷ ncol + 1, n % ncol + 1]; label=ov_labels[key],
                 fontsize=12, labelcolor=col, labelcolor_hover=col, labelcolor_active=col,
                 buttoncolor_hover=ui().accent_soft, buttoncolor_active=ui().accent_soft,
                 strokecolor=(col, 0.6), strokewidth=1, cornerradius=4,
@@ -842,7 +852,7 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
         (ax_ph, 4, tg_ph), (ax_pres, 5, tg_pres), (ax_rate, 6, tg_rate))
 
     function showaxis!(ax, vis)
-        ax.ylabelvisible = vis
+        ax.ylabelvisible = vis && ax === ax_ov    # stacked panels show their name inside
         ax.yticksvisible = vis
         ax.yticklabelsvisible = vis
         ax.ygridvisible = false   # no horizontal grid lines
@@ -979,7 +989,7 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
     chip!(slot!(120)[1, 1], @lift($is_rec ? "● REC" : "NOT RECORDING"),
         @lift(RGBAf($is_rec ? pal.rec : pal.faint, $is_rec && !$blink ? 0.45 : 1.0)))
     Label(slot!(380)[1, 1], recording; halign=:left, fontsize=FS_SMALL + 1, color=pal.muted)
-    Label(statusbar[1, col+=1], "Drag: zoom · Right-drag: pan · Ctrl-click: reset · Alt/Shift-click: inspect moment";
+    help_lbl = Label(statusbar[1, col+=1], "Drag: zoom · Right-drag: pan · Ctrl-click: reset · Alt/Shift-click: inspect moment";
         halign=:right, fontsize=FS_SMALL, color=pal.muted, tellwidth=false)
     colgap!(statusbar, 10)
     viewer || _precompiling() || @async while true   # a flag flip every 0.6 s; ends with the program
@@ -1060,10 +1070,14 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
     logpane = GridLayout(left[9, 1]; tellwidth=false)
     log_blocks = Any[]
     log_listeners = Any[]
-    LOG_ROWS = 10
+    # Lines in the log: fewer on short windows, so the plots keep their room.
+    log_rows() = clamp((round(Int, fig.scene.viewport[].widths[2]) - 650) ÷ 17, 4, 10)
+    shown_log_rows = Ref(0)
     function open_log!()
         filt = Textbox(logpane[1, 1]; placeholder="Filter the run log…", width=260, fontsize=13,
             halign=:left, tellwidth=false)      # the list below sets the width, not the box
+        LOG_ROWS = shown_log_rows[] = log_rows()
+        rowsize!(left, 9, Auto())
         lax = Axis(logpane[2, 1]; height=LOG_ROWS * 17 + 8, backgroundcolor=pal.panel,
             limits=(0, 100, nothing, nothing), leftspinevisible=false, bottomspinevisible=false)
         hidedecorations!(lax)
@@ -1124,8 +1138,11 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
         foreach(delete!, log_blocks)
         empty!(log_blocks)
         trim!(logpane)
+        rowsize!(left, 9, Fixed(0))          # a closed log takes no room (overlay gets it)
+        shown_log_rows[] = 0
     end
-    on(checked -> checked ? open_log!() : close_log!(), tg_log.checked)
+    on(checked -> batch(checked ? open_log! : close_log!), tg_log.checked)
+    rowsize!(left, 9, Fixed(0))
 
     # ── Hover readout: values under the mouse in every panel ──────────────────
     hover_x = Observable(Float32[])
@@ -1189,6 +1206,33 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
             hover!(a, mp[1], mp[2])
         end
     end
+
+    # ── Small windows: keep everything readable ───────────────────────────────
+    # The right column keeps at least 340 px; when the toolbar does not fit in one
+    # row its panel checkboxes move to a second row; the mouse help is hidden when
+    # narrow; the run log and the overlay legend adapt to the window.
+    GLB = Makie.GridLayoutBase
+    panels_below = Ref(false)
+    tbwidth(gl) = something(GLB.determinedirsize(gl, GLB.Col()), 600.0)
+    function respond!()
+        w, h = fig.scene.viewport[].widths
+        batch() do
+            rightw = round(Int, clamp(0.25w, 340, 480))
+            colsize!(body, 1, Auto())
+            colsize!(body, 2, Fixed(rightw))
+            fits = tbwidth(tb_view) + tbwidth(tb_panels) + 28 <= w - rightw - 60
+            if fits == panels_below[]
+                fits ? (toolbar[1, 2] = tb_panels) : (toolbar[2, 1] = tb_panels)
+                panels_below[] = !fits
+                trim!(toolbar)
+            end
+            help_lbl.visible = w >= 1350
+            shown_log_rows[] > 0 && shown_log_rows[] != log_rows() && (close_log!(); open_log!())
+            overlay[] && rebuild_legend!()
+        end
+    end
+    on(_ -> respond!(), fig.scene.viewport)
+    respond!()
 
     sel_slider.range[] = 1:max(1, length(app.trend_data[]))
     set_close_to!(sel_slider, length(app.trend_data[]))
@@ -1407,7 +1451,9 @@ function _draw_flow_schematic!(ax, state::Observable{InstrumentState},
     # here, and the active ones are drawn together as one segments plot (on(state)).
     pipes = Dict{Symbol,Any}[]
     function pipe!(xs, ys; color=pal.pipe, lw=3.2)
-        pp = Dict{Symbol,Any}(:pts => Point2f.(xs, ys), :color => RGBAf(color), :lw => Float32(lw),
+        # a path through several points is stored as consecutive segments
+        segs = [Point2f(xs[k+j], ys[k+j]) for k in 1:length(xs)-1 for j in 0:1]
+        pp = Dict{Symbol,Any}(:pts => segs, :color => RGBAf(color), :lw => Float32(lw),
             :visible => false, :alpha => 1.0)
         push!(pipes, pp)
         return pp
@@ -1433,14 +1479,19 @@ function _draw_flow_schematic!(ax, state::Observable{InstrumentState},
     # ── Buffer valve: 8 inlet ports in a row above it, feeding the A side ───
     # The active port is filled and piped to the valve; the valve feeds the mixer
     # (switch valve), where buffer B is mixed in.
+    # Buffer A sits in the left column with the waste outlets. The ports form a row
+    # starting right above it (port 1, the standard buffer A, straight above), and
+    # the active one is piped down to a short manifold line, then into Buffer A.
     n_ports = 8
-    x_vlv = 2.9
+    x_vlv = x_l
     y_port = 12.45
-    port_x = [x_vlv + 0.62 * (i - (n_ports + 1) / 2) for i in 1:n_ports]
+    y_manifold = 12.0
+    port_x = [x_vlv + 0.62 * (i - 1) for i in 1:n_ports]
     port_color(i) = i == 1 ? pal.buf_a : i == n_ports ? pal.sample : pal.buf_port
 
-    ln_ports = [pipe!([port_x[i], x_vlv], [y_port - 0.24, y_buf + 0.31];
-        color=port_color(i), lw=2.6) for i in 1:n_ports]
+    ln_ports = [i == 1 ? pipe!([x_vlv, x_vlv], [y_port - 0.24, y_buf + 0.31]; color=port_color(i), lw=2.6) :
+                pipe!([port_x[i], port_x[i], x_vlv, x_vlv], [y_port - 0.24, y_manifold, y_manifold, y_buf + 0.31];
+                    color=port_color(i), lw=2.6) for i in 1:n_ports]
 
     # Geometry chosen to mirror the requested routing diagrams.
     ln_buf_a = pipe!([x_vlv, x_c], [y_buf - 0.31, y_mix + 0.02]; color=pal.buf_a)
@@ -1569,8 +1620,8 @@ function _draw_flow_schematic!(ax, state::Observable{InstrumentState},
         # all active pipes in one segments plot (two points per pipe)
         active = filter(pp -> pp[:visible], pipes)
         pipe_data[] = (reduce(vcat, (pp[:pts] for pp in active); init=Point2f[]),
-            reduce(vcat, (fill(RGBAf(pp[:color], pp[:alpha] * Makie.alpha(pp[:color])), 2) for pp in active); init=RGBAf[]),
-            reduce(vcat, (fill(pp[:lw], 2) for pp in active); init=Float32[]))
+            reduce(vcat, (fill(RGBAf(pp[:color], pp[:alpha] * Makie.alpha(pp[:color])), length(pp[:pts])) for pp in active); init=RGBAf[]),
+            reduce(vcat, (fill(pp[:lw], length(pp[:pts])) for pp in active); init=Float32[]))
 
         inj_txt.text[] = _inject_label(s.inject_value)
         out_txt.text[] = is_unk ? "PATH UNKNOWN" :

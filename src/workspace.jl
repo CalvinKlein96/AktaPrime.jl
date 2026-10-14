@@ -137,14 +137,18 @@ function open_run!(ws::Workspace)
 
     # Parse the file on a worker thread; this task waits without blocking the
     # window. The new AppState has no listeners yet, so filling it there is safe.
+    # The serial link permanently occupies one worker thread, so a second one is
+    # needed; without it the load would wait for the link and is done here instead.
     app = AppState()
-    fetch(Threads.@spawn load_csv_log!(app, path))
+    Threads.nthreads(:default) >= 2 ? fetch(Threads.@spawn load_csv_log!(app, path)) :
+                                      load_csv_log!(app, path)
     app.log_filename = path
     app.log_dir = dirname(path)        # plots exported from this tab go next to the CSV,
     app.log_prefix = replace(basename(path), r"\.csv$"i => "")   # named after the run
     @info "Opened $path"
     show_page!(ws, add_page!((topbar, on_screen) ->
-            build_gui(app; viewer=true, topbar, on_screen, status=ws.acq.status), ws, title))
+            build_gui(app; viewer=true, topbar, on_screen, status=ws.acq.status,
+                start_panels=ws.acq.settings.start_panels), ws, title))
 end
 
 # ── Settings ─────────────────────────────────────────────────────────────────
@@ -255,7 +259,17 @@ function _settings_figure(ws::Workspace, topbar)::Figure
     dark = Toggle(g[8, 2]; active=s.dark_mode, halign=:left)
     note(8, "Applies at the next start of the program.")
 
-    feedback = Label(g[10, 1:3], ""; halign=:left, fontsize=FS_BODY, color=ui().ok)
+    lbl(10, "Panels shown at start")
+    pg = GridLayout(g[10, 2]; halign=:left, default_colgap=12)
+    panel_boxes = map(enumerate(ALL_PANELS)) do (i, name)
+        sub = GridLayout(pg[1, i]; default_colgap=4)
+        cb = Checkbox(sub[1, 1]; checked=name in s.start_panels)
+        Label(sub[1, 2], name; fontsize=FS_BODY)
+        name => cb
+    end
+    note(10, "Plots switched on when the program starts or a run is opened (UV is always shown).")
+
+    feedback = Label(g[11, 1:3], ""; halign=:left, fontsize=FS_BODY, color=ui().ok)
     rowgap!(g, 14)
     colgap!(g, 16)
 
@@ -297,6 +311,12 @@ function _settings_figure(ws::Workspace, topbar)::Figure
             acq.app.log_dir = data_dir(s)
             folder.text = acq.app.log_dir
             changed!("Data folder set to $(acq.app.log_dir); the next log file goes there.")
+        end
+    end
+    for (name, cb) in panel_boxes
+        on(cb.checked) do _
+            s.start_panels = [n for (n, c) in panel_boxes if c.checked[]]
+            changed!("Panels shown at start: " * (isempty(s.start_panels) ? "UV only" : join(s.start_panels, ", ")) * ".")
         end
     end
     on(refresh.selection) do sel

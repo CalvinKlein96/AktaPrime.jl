@@ -167,6 +167,11 @@ end
 function _run_live(serial_override::Union{Nothing,AbstractString}=nothing)
     global_logger(ConsoleLogger(stderr, Logging.Info))
 
+    # The file dialog (GTK) would otherwise print messages about desktop GTK modules
+    # that are not installed here, and about the accessibility bridge.
+    delete!(ENV, "GTK_MODULES")
+    get!(ENV, "NO_AT_BRIDGE", "1")
+
     settings = load_settings()
     if !isnothing(serial_override)
         settings.serial_port = String(serial_override)
@@ -185,10 +190,17 @@ function _run_live(serial_override::Union{Nothing,AbstractString}=nothing)
     # activate!: ensure the interactive backend (not CairoMakie, used for PDF export)
     GLMakie.activate!(; title="AktaPrime")
     ws = Workspace(acq)
-    live = add_page!((topbar, on_screen) -> build_gui(app; topbar, on_screen, status=acq.status),
+    live = add_page!((topbar, on_screen) ->
+            build_gui(app; topbar, on_screen, status=acq.status, start_panels=settings.start_panels),
         ws, "Live"; closable=false)
     show_page!(ws, live)
     ws.screen = display(live.fig)
+    # Below this size the layout gets too cramped; it still fits a 1366×768 screen.
+    try
+        GLMakie.GLFW.SetWindowSizeLimits(ws.screen.glscreen, 1100, 680, -1, -1)
+    catch err
+        @debug "Could not set a minimum window size" exception = err
+    end
     @info "GUI opened"
     # Build the Settings page in the background, so its first opening is quick.
     @async (sleep(2); _later(() -> prepare_settings!(ws), ws))

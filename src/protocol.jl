@@ -620,7 +620,12 @@ end
 # by the event loop, which a busy main thread (GUI) does not service, so the link
 # would stall with it. On the main thread an OS sleep would freeze the GUI instead.
 const LINK_OWN_THREAD = Ref(false)
-_link_sleep(s::Real) = LINK_OWN_THREAD[] ? Libc.systemsleep(s) : sleep(s)
+# GC-safe: other threads' garbage collection need not wait for this sleep to end
+# (Libc.systemsleep blocks it, which would stall the GUI for up to the poll interval).
+_os_sleep(s::Real) = Sys.iswindows() ?
+    (@ccall gc_safe = true "kernel32".Sleep(round(UInt32, s * 1e3)::UInt32)::Cvoid) :
+    (@ccall gc_safe = true usleep(round(UInt32, s * 1e6)::UInt32)::Cint; nothing)
+_link_sleep(s::Real) = LINK_OWN_THREAD[] ? _os_sleep(s) : sleep(s)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # write_frame_read_reply (unchanged from linklayer.jl)
@@ -671,144 +676,158 @@ function run_linklayer(tx_queue::Channel, shutdown::Ref{Bool}, app::AppState,
     LINK_OWN_THREAD[] = Threads.threadid() != 1
     @info "Link layer on thread $(Threads.threadid())" * (LINK_OWN_THREAD[] ? "" : " (shared with the GUI)")
 
-    # A missing or unplugged adaptor is retried until it appears, not fatal.
-    sp = nothing
-    warned = false
-    while isnothing(sp) && !shutdown[]
-        try
-            sp = LibSerialPort.open(serial_port, BAUD_RATE)
-        catch err
-            warned || @warn "Serial port $serial_port not available — retrying" exception = err
-            warned || say("Serial port $serial_port not available — retrying")
-            warned = true
-            _link_sleep(2.0)
-        end
-    end
-    isnothing(sp) && return
-    @info "Opened $serial_port at $BAUD_RATE baud"
-    say("Waiting for Akta on $serial_port")
-    set_flow_control(sp; rts=SP_RTS_ON, cts=SP_CTS_IGNORE, dtr=SP_DTR_ON, dsr=SP_DSR_IGNORE)
-
-    st = LinkState()
-    load_probe_replies!()
-    poll_frame = build_poll_frame()
-    cur_frame = poll_frame
-    t_last = time_ns()
-
-    @info "Link layer started; polling for Akta"
-
-    try
-        while !shutdown[]
-            t_now = time_ns()
-            elapsed_ms = Int((t_now - t_last) ÷ 1_000_000)
-            delay_ms = elapsed_ms < POLL_INTERVAL_MS ? POLL_INTERVAL_MS - elapsed_ms : 1
-            _link_sleep(delay_ms / 1000.0)
-            t_now = time_ns()
-            elapsed_ms = Int((t_now - t_last) ÷ 1_000_000)
-            t_last = t_now
-
-            probing = false
-            if !st.connected
-                while isready(tx_queue)
-                    take!(tx_queue)
-                end
-                cur_frame = poll_frame
-
-            else
-                st.idle_ms += elapsed_ms
-                # While the Akta is silent, interleave poll frames: if it has
-                # reset its link it answers with CTRL_CONN and we resync below.
-                if st.idle_ms > IDLE_TIMEOUT_MS
-                    st.probe_ms += elapsed_ms
-                    if st.probe_ms >= PROBE_INTERVAL_MS
-                        st.probe_ms = 0
-                        probing = true
-                    end
-                end
-                if !probing && !st.pending_tx
-                    if isready(tx_queue)
-                        opc, data = take!(tx_queue)
-                        payload = encode_opc_payload(opc, data)
-                        st.sn = (st.sn + 0x01) & 0x03
-                        cur_frame = build_i_frame(payload, st.sn, st.rn)
-                        st.pending_tx = true
-                    else
-                        cur_frame = build_ack_frame(st.rn)
-                    end
-                end
+    # One session per connection: open the port (retrying while it is missing),
+    # then poll. If the port fails (cable pulled, adaptor reset: "Input/output
+    # error"), the session ends and a new one starts — the link never just stops.
+    while !shutdown[]
+        # A missing or unplugged adaptor is retried until it appears, not fatal.
+        sp = nothing
+        warned = false
+        while isnothing(sp) && !shutdown[]
+            try
+                sp = LibSerialPort.open(serial_port, BAUD_RATE)
+            catch err
+                warned || @warn "Serial port $serial_port not available — retrying" exception = err
+                warned || say("Serial port $serial_port not available — retrying")
+                warned = true
+                _link_sleep(2.0)
             end
+        end
+        isnothing(sp) && break
+        @info "Opened $serial_port at $BAUD_RATE baud"
+        say("Waiting for Akta on $serial_port")
+        set_flow_control(sp; rts=SP_RTS_ON, cts=SP_CTS_IGNORE, dtr=SP_DTR_ON, dsr=SP_DSR_IGNORE)
 
-            # cur_frame is kept intact while probing so a pending I-frame is retransmitted later
-            reply = write_frame_read_reply(sp, probing ? poll_frame : cur_frame)
-            rx_len = length(reply)
+        st = LinkState()
+        load_probe_replies!()
+        poll_frame = build_poll_frame()
+        cur_frame = poll_frame
+        t_last = time_ns()
 
-            if rx_len > 0 && validate_rx_frame(reply, rx_len)
-                ctrl = reply[3]
+        @info "Link layer started; polling for Akta"
 
+        try
+            while !shutdown[]
+                t_now = time_ns()
+                elapsed_ms = Int((t_now - t_last) ÷ 1_000_000)
+                delay_ms = elapsed_ms < POLL_INTERVAL_MS ? POLL_INTERVAL_MS - elapsed_ms : 1
+                _link_sleep(delay_ms / 1000.0)
+                t_now = time_ns()
+                elapsed_ms = Int((t_now - t_last) ÷ 1_000_000)
+                t_last = t_now
+
+                probing = false
                 if !st.connected
-                    if rx_len == 5 && ctrl == CTRL_CONN
-                        @info "Akta connected"
-                        _link_reset!(st, tx_queue)
-                        post(() -> push_event!(app, EVT_CONNECT, "Akta connected"))
-                        say("● Connected on $serial_port")
-                    else
-                        @warn "Unexpected frame while disconnected: ctrl=0x$(string(ctrl, base=16))"
+                    while isready(tx_queue)
+                        take!(tx_queue)
                     end
+                    cur_frame = poll_frame
 
                 else
-                    st.silent && say("● Connected on $serial_port")
-                    _link_alive!(st, app, post)
-
-                    if rx_len == 5 && ctrl == CTRL_CONN
-                        # The Akta restarted its side of the link: resync rather than drop out
-                        @warn "Akta re-established the link — resynchronising"
-                        _link_reset!(st, tx_queue)
-                        post(() -> push_event!(app, EVT_LOG, "Link: Akta re-established the link"))
-
-                    elseif (ctrl & 0xf0) == CTRL_IFRAME
-                        received_sn = (ctrl >> 2) & 0x03
-                        if received_sn == (st.rn + 0x01) & 0x03
-                            st.rn = received_sn
-                            parse_rx_data_frame(reply, rx_len, tx_queue, st, app, post)
-                        elseif received_sn == st.rn
-                            @warn "LinkLayer: duplicate I-frame SN=$received_sn"
-                        else
-                            # Frames were lost; accept this one and resync, otherwise the
-                            # Akta retransmits it forever and nothing more is recorded.
-                            @warn "LinkLayer: SN error — expected $((st.rn+1)&3), got $received_sn; resynchronising"
-                            st.rn = received_sn
-                            parse_rx_data_frame(reply, rx_len, tx_queue, st, app, post)
+                    st.idle_ms += elapsed_ms
+                    # While the Akta is silent, interleave poll frames: if it has
+                    # reset its link it answers with CTRL_CONN and we resync below.
+                    if st.idle_ms > IDLE_TIMEOUT_MS
+                        st.probe_ms += elapsed_ms
+                        if st.probe_ms >= PROBE_INTERVAL_MS
+                            st.probe_ms = 0
+                            probing = true
                         end
-                        if st.sn == (ctrl & 0x03)
-                            st.pending_tx = false
+                    end
+                    if !probing && !st.pending_tx
+                        if isready(tx_queue)
+                            opc, data = take!(tx_queue)
+                            payload = encode_opc_payload(opc, data)
+                            st.sn = (st.sn + 0x01) & 0x03
+                            cur_frame = build_i_frame(payload, st.sn, st.rn)
+                            st.pending_tx = true
                         else
-                            @warn "LinkLayer: RN mismatch in I-frame ctrl"
+                            cur_frame = build_ack_frame(st.rn)
                         end
+                    end
+                end
 
-                    elseif (ctrl & 0xfc) == CTRL_RR_BASE
-                        if st.sn == (ctrl & 0x03)
-                            st.pending_tx = false
+                # cur_frame is kept intact while probing so a pending I-frame is retransmitted later
+                reply = write_frame_read_reply(sp, probing ? poll_frame : cur_frame)
+                rx_len = length(reply)
+
+                if rx_len > 0 && validate_rx_frame(reply, rx_len)
+                    ctrl = reply[3]
+
+                    if !st.connected
+                        if rx_len == 5 && ctrl == CTRL_CONN
+                            @info "Akta connected"
+                            _link_reset!(st, tx_queue)
+                            post(() -> push_event!(app, EVT_CONNECT, "Akta connected"))
+                            say("● Connected on $serial_port")
                         else
-                            @warn "LinkLayer: RN mismatch in RR frame"
+                            @warn "Unexpected frame while disconnected: ctrl=0x$(string(ctrl, base=16))"
                         end
 
                     else
-                        @warn "LinkLayer: unexpected ctrl 0x$(string(ctrl, base=16))"
+                        st.silent && say("● Connected on $serial_port")
+                        _link_alive!(st, app, post)
+
+                        if rx_len == 5 && ctrl == CTRL_CONN
+                            # The Akta restarted its side of the link: resync rather than drop out
+                            @warn "Akta re-established the link — resynchronising"
+                            _link_reset!(st, tx_queue)
+                            post(() -> push_event!(app, EVT_LOG, "Link: Akta re-established the link"))
+
+                        elseif (ctrl & 0xf0) == CTRL_IFRAME
+                            received_sn = (ctrl >> 2) & 0x03
+                            if received_sn == (st.rn + 0x01) & 0x03
+                                st.rn = received_sn
+                                parse_rx_data_frame(reply, rx_len, tx_queue, st, app, post)
+                            elseif received_sn == st.rn
+                                @warn "LinkLayer: duplicate I-frame SN=$received_sn"
+                            else
+                                # Frames were lost; accept this one and resync, otherwise the
+                                # Akta retransmits it forever and nothing more is recorded.
+                                @warn "LinkLayer: SN error — expected $((st.rn+1)&3), got $received_sn; resynchronising"
+                                st.rn = received_sn
+                                parse_rx_data_frame(reply, rx_len, tx_queue, st, app, post)
+                            end
+                            if st.sn == (ctrl & 0x03)
+                                st.pending_tx = false
+                            else
+                                @warn "LinkLayer: RN mismatch in I-frame ctrl"
+                            end
+
+                        elseif (ctrl & 0xfc) == CTRL_RR_BASE
+                            if st.sn == (ctrl & 0x03)
+                                st.pending_tx = false
+                            else
+                                @warn "LinkLayer: RN mismatch in RR frame"
+                            end
+
+                        else
+                            @warn "LinkLayer: unexpected ctrl 0x$(string(ctrl, base=16))"
+                        end
                     end
+                end
+
+                # Never disconnect on silence: keep the link and the log open and just report it
+                if st.connected && !st.silent && st.idle_ms > IDLE_TIMEOUT_MS
+                    st.silent = true
+                    @warn "No response from Akta for $(st.idle_ms ÷ 1000) s — staying connected, probing"
+                    post(() -> push_event!(app, EVT_LOG, "Link: no response from Akta — waiting"))
+                    say("No response from Akta on $serial_port — waiting")
                 end
             end
 
-            # Never disconnect on silence: keep the link and the log open and just report it
-            if st.connected && !st.silent && st.idle_ms > IDLE_TIMEOUT_MS
-                st.silent = true
-                @warn "No response from Akta for $(st.idle_ms ÷ 1000) s — staying connected, probing"
-                post(() -> push_event!(app, EVT_LOG, "Link: no response from Akta — waiting"))
-                say("No response from Akta on $serial_port — waiting")
+        catch err
+            err isa InterruptException && rethrow()
+            @warn "Serial connection lost — reconnecting" exception = err
+            post(() -> push_event!(app, EVT_LOG, "Link: serial connection lost — reconnecting"))
+            say("Connection to $serial_port lost — reconnecting")
+        finally
+            try
+                LibSerialPort.close(sp)
+            catch
             end
         end
-
-    finally
-        @info "Link layer shutting down"
-        LibSerialPort.close(sp)
+        shutdown[] || _link_sleep(2.0)
     end
+    @info "Link layer shutting down"
 end
