@@ -7,3 +7,4 @@ docs/build
 sysimage/*.so
 sysimage/*.dll
 sysimage/*.dylib
+LocalPreferences.toml

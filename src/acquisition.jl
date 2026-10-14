@@ -61,7 +61,7 @@ function start!(acq::Acquisition)
         acq.task = @async Base.invokelatest(run_demo, acq.shutdown, app)
     else
         @info "Connecting to Akta at $(s.serial_port)"
-        RAW_IO[] = open(replace(app.log_filename, r"\.csv$" => "_raw.txt"), "w")
+        s.save_raw && (RAW_IO[] = open(replace(app.log_filename, r"\.csv$" => "_raw.txt"), "w"))
         acq.status[] = "Opening $(s.serial_port) …"
         # The link polls on its own thread, so a busy GUI cannot silence it; what
         # it receives is applied here on the main thread (see run_linklayer).

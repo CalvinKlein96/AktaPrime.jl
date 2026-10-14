@@ -269,7 +269,11 @@ function _settings_figure(ws::Workspace, topbar)::Figure
     end
     note(10, "Plots switched on when the program starts or a run is opened (UV is always shown).")
 
-    feedback = Label(g[11, 1:3], ""; halign=:left, fontsize=FS_BODY, color=ui().ok)
+    lbl(11, "Save raw instrument data")
+    raw = Toggle(g[11, 2]; active=s.save_raw, halign=:left)
+    note(11, "For troubleshooting: also saves every instrument message (_raw.txt) and method dumps (.met). From the next log file on.")
+
+    feedback = Label(g[12, 1:3], ""; halign=:left, fontsize=FS_BODY, color=ui().ok)
     rowgap!(g, 14)
     colgap!(g, 16)
 
@@ -318,6 +322,12 @@ function _settings_figure(ws::Workspace, topbar)::Figure
             s.start_panels = [n for (n, c) in panel_boxes if c.checked[]]
             changed!("Panels shown at start: " * (isempty(s.start_panels) ? "UV only" : join(s.start_panels, ", ")) * ".")
         end
+    end
+    on(raw.active) do on_
+        s.save_raw == on_ && return
+        s.save_raw = on_
+        changed!((on_ ? "Raw instrument data will be saved" : "Raw instrument data will not be saved") *
+                 ", from the next log file on.")
     end
     on(refresh.selection) do sel
         hz = REFRESH_HZ[findfirst(==(sel), REFRESH_OPTIONS)]

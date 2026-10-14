@@ -480,10 +480,12 @@ function _capture_opc(opc::UInt16, data::Vector{UInt8}, app::AppState)
         isnothing(METHOD_BUF[]) && (METHOD_BUF[] = UInt8[])   # transfer seen without its 0x2007
         append!(METHOD_BUF[], data)
     elseif opc == OPC_METHOD_DATA_B && !isnothing(METHOD_BUF[])
-        METHOD_COUNT[] += 1
-        path = replace(app.log_filename, r"\.csv$" => "_method_$(METHOD_COUNT[]).met")
-        write(path, METHOD_BUF[])
-        @info "Saved method transfer ($(length(METHOD_BUF[])) bytes) to $path"
+        if !isnothing(RAW_IO[])           # saved only with "Save raw instrument data" on
+            METHOD_COUNT[] += 1
+            path = replace(app.log_filename, r"\.csv$" => "_method_$(METHOD_COUNT[]).met")
+            write(path, METHOD_BUF[])
+            @info "Saved method transfer ($(length(METHOD_BUF[])) bytes) to $path"
+        end
         try
             apply_method_dump!(app, parse_method_dump(METHOD_BUF[]))
         catch err
@@ -493,44 +495,8 @@ function _capture_opc(opc::UInt16, data::Vector{UInt8}, app::AppState)
     end
 end
 
-# Debug probe for exploring requests the original PC software answered.
-# AKTA_PROBE="2015=2016:0300|1015:010001,2019=201a:" answers each listed incoming
-# OPC (hex) with a reply OPC and data bytes (hex, may be empty). Several replies
-# separated by '|' are used in turn, one per request, to sweep candidates.
-# Off unless set.
-const PROBE_REPLIES = Dict{UInt16,Vector{Tuple{UInt16,Vector{UInt8}}}}()
-const PROBE_COUNT = Dict{UInt16,Int}()
-
-function load_probe_replies!(spec::AbstractString=get(ENV, "AKTA_PROBE", ""))
-    empty!(PROBE_REPLIES)
-    empty!(PROBE_COUNT)
-    for entry in split(spec, ','; keepempty=false)
-        req, replies = split(strip(entry), '=')
-        PROBE_REPLIES[parse(UInt16, req; base=16)] = map(split(replies, '|')) do reply
-            opc, data = split(strip(reply), ':')
-            (parse(UInt16, opc; base=16), hex2bytes(data))
-        end
-    end
-    isempty(PROBE_REPLIES) || @warn "Probe replies active: $spec"
-end
-
-function _probe_reply(opc::UInt16, tx_queue::Channel, app::AppState)
-    haskey(PROBE_REPLIES, opc) || return
-    replies = PROBE_REPLIES[opc]
-    n = PROBE_COUNT[opc] = get(PROBE_COUNT, opc, 0) + 1
-    n > length(replies) && return   # sweep finished
-    ropc, rdata = replies[n]
-    put!(tx_queue, (ropc, copy(rdata)))
-    txt = "Probe $n/$(length(replies)): answered 0x$(string(opc, base=16, pad=4)) " *
-          "with 0x$(string(ropc, base=16, pad=4)) [$(bytes2hex(rdata))]"
-    @info txt
-    push_event!(app, EVT_LOG, txt)
-    isnothing(RAW_IO[]) || (println(RAW_IO[], Dates.format(now(), "HH:MM:SS.sss"), "  TX ", txt); flush(RAW_IO[]))
-end
-
 function dispatch_rx_opc(opc::UInt16, data::Vector{UInt8}, tx_queue::Channel, app::AppState)
     _capture_opc(opc, data, app)
-    _probe_reply(opc, tx_queue, app)
     if opc == OPC_PROG_NAME
         name = rstrip(String(copy(data[1:min(100, end)])), '\0')
         @info "Programme name: $name"
@@ -699,7 +665,6 @@ function run_linklayer(tx_queue::Channel, shutdown::Ref{Bool}, app::AppState,
         set_flow_control(sp; rts=SP_RTS_ON, cts=SP_CTS_IGNORE, dtr=SP_DTR_ON, dsr=SP_DSR_IGNORE)
 
         st = LinkState()
-        load_probe_replies!()
         poll_frame = build_poll_frame()
         cur_frame = poll_frame
         t_last = time_ns()
