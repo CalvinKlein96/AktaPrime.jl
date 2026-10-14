@@ -4,3 +4,6 @@
 *.met
 docs/build
 *figure*.pdf
+sysimage/*.so
+sysimage/*.dll
+sysimage/*.dylib

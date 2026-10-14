@@ -52,7 +52,8 @@ function _topbar(ws::Workspace, listeners::Vector{Any})
         # Flat tabs: title (+ close ×) on the bar colour, the active one in bold
         # accent with an accent underline. No outlines, which clip at the edges.
         tab_items = Any[]
-        function rebuild()
+        rebuild() = batch_layout(_rebuild, pos.layout)
+        function _rebuild()
             foreach(delete!, tab_items)
             empty!(tab_items)
             trim!(tabs)
@@ -134,8 +135,10 @@ function open_run!(ws::Workspace)
     existing = findfirst(p -> p.title == title, ws.pages)
     isnothing(existing) || return show_page!(ws, ws.pages[existing])
 
+    # Parse the file on a worker thread; this task waits without blocking the
+    # window. The new AppState has no listeners yet, so filling it there is safe.
     app = AppState()
-    load_csv_log!(app, path)
+    fetch(Threads.@spawn load_csv_log!(app, path))
     app.log_filename = path
     app.log_dir = dirname(path)        # plots exported from this tab go next to the CSV,
     app.log_prefix = replace(basename(path), r"\.csv$"i => "")   # named after the run
@@ -161,6 +164,7 @@ end
 function _runinfo_figure(ws::Workspace, topbar)::Figure
     acq, s = ws.acq, ws.acq.settings
     fig = Figure(size=(1440, 900))
+    fig.layout.block_updates = true     # one layout solve once the page is built
     topbar(fig[1, 1])
     g = GridLayout(fig[2, 1]; halign=:left, valign=:top, tellwidth=false, tellheight=false,
         alignmode=Outside(40))
@@ -193,6 +197,7 @@ function _runinfo_figure(ws::Workspace, topbar)::Figure
         log_run_info!(acq.app, s.run_info; only_changed=true)
         feedback.text = "Saved" * (isnothing(acq.app.csv_io) ? "." : " and recorded in $(basename(acq.app.log_filename)).")
     end
+    finish_layout!(fig)
     return fig
 end
 
@@ -208,6 +213,7 @@ open_settings!(ws::Workspace) = show_page!(ws, prepare_settings!(ws))
 function _settings_figure(ws::Workspace, topbar)::Figure
     acq, s = ws.acq, ws.acq.settings
     fig = Figure(size=(1440, 900))
+    fig.layout.block_updates = true     # one layout solve once the page is built
     topbar(fig[1, 1])
     g = GridLayout(fig[2, 1]; halign=:left, valign=:top, tellwidth=false, tellheight=false,
         alignmode=Outside(40))
@@ -311,5 +317,6 @@ function _settings_figure(ws::Workspace, topbar)::Figure
         s.log_prefix = acq.app.log_prefix = str
         changed!("Log prefix set to \"$str\"; the next log file will use it.")
     end
+    finish_layout!(fig)
     return fig
 end

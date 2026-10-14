@@ -275,18 +275,40 @@ end
 # affected; only what is drawn is batched.
 const GUI_REFRESH_S = Ref(0.5)
 
+# Applies a group of GUI changes with a single layout solve at the end. Without
+# this, every changed label or axis property re-solves the whole window layout,
+# which was the main cost of refreshes, toggles and tab switches. Nestable.
+function batch_layout(f, layout::GridLayout)
+    layout.block_updates && return f()
+    layout.block_updates = true
+    try
+        return f()
+    finally
+        layout.block_updates = false
+        Makie.GridLayoutBase.update!(layout)
+    end
+end
+
+# Pages are built with layout updates blocked (one solve per element otherwise);
+# this lifts the block and solves the layout once.
+function finish_layout!(fig::Figure)
+    fig.layout.block_updates = false
+    Makie.GridLayoutBase.update!(fig.layout)
+end
+
 # True while the package is being precompiled: background loops must not start then.
 _precompiling() = ccall(:jl_generating_output, Cint, ()) == 1
 
 # Copies of `srcs` that pass changes on at most every GUI_REFRESH_S, and only
 # while `active` (the page is on screen); a page catches up when it is shown.
-function _throttled(srcs::Observable...; active::Observable{Bool}=Observable(true))
+function _throttled(srcs::Observable...; active::Observable{Bool}=Observable(true), batch=f -> f())
     proxies = map(o -> Observable(o[]), srcs)
     dirty = fill(false, length(srcs))
     for (i, o) in enumerate(srcs)
         on(_ -> (dirty[i] = true), o)
     end
-    function flush!()
+    # one refresh = one layout solve, however many views it updates
+    flush!() = any(dirty) && batch() do
         for i in eachindex(srcs)
             dirty[i] || continue
             dirty[i] = false
@@ -356,13 +378,15 @@ end
 function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
     status::Union{Nothing,Observable{String}}=nothing, on_screen::Observable{Bool}=Observable(true))::Figure
     fig = Figure(size=(1440, 900))      # colours and fonts from the theme (theme.jl)
+    fig.layout.block_updates = true     # one layout solve once the page is built
     pal = ui()                          # palette; not `p`, which closures below use for points
+    batch(f) = batch_layout(f, fig.layout)
 
     # Live data reaches the views through throttled copies (see _throttled); a
     # log opened for viewing does not change, so it is used directly.
     trend_obs, events_obs, inst_obs, fracs_obs = viewer ?
         (app.trend_data, app.events, app.inst, app.fractions) :
-        _throttled(app.trend_data, app.events, app.inst, app.fractions; active=on_screen)
+        _throttled(app.trend_data, app.events, app.inst, app.fractions; active=on_screen, batch)
 
     # Layout, one area per job:
     #   top bar      navigation and global actions (tabs, menu; see workspace.jl)
@@ -446,16 +470,16 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
 
     # ── Event vlines on UV panel ──────────────────────────────────────────────
     # xautolimits/yautolimits=false prevents Makie calling extrema on empty vectors.
-    for kind in instances(EventKind)
-        kind == EVT_INFO && continue      # run documentation is listed in the run log, not drawn
-        let kind = kind
-            color, style = get(EVT_COLORS, kind, (:black, :dash))
-            evts_k = @lift filter(e -> e.kind == kind, $(events_obs))
-            evt_x_k = @lift [_event_x(e, $xscale) for e in $evts_k]
-            for ax in (ax_uv, ax_ov)
-                vlines!(ax, evt_x_k; color=(color, 0.55), linestyle=style, linewidth=1.0,
-                    xautolimits=false, yautolimits=false)
-            end
+    # One plot for the solid and one for the dashed event lines (coloured per event),
+    # instead of one per event kind: fewer plot objects. Run information is not drawn.
+    evt_style(e) = get(EVT_COLORS, e.kind, (:black, :dash))
+    for dashed in (false, true)
+        evts = @lift filter(e -> e.kind != EVT_INFO && (evt_style(e)[2] != :solid) == dashed, $(events_obs))
+        evt_x = @lift [_event_x(e, $xscale) for e in $evts]
+        evt_col = @lift [RGBAf(Makie.to_color(evt_style(e)[1]), 0.55) for e in $evts]
+        for ax in (ax_uv, ax_ov)
+            vlines!(ax, evt_x; color=evt_col, linestyle=dashed ? :dash : :solid, linewidth=1.0,
+                xautolimits=false, yautolimits=false)
         end
     end
 
@@ -688,7 +712,8 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
     # manual zooming continue to work normally afterwards.
     # Column volumes need the column volume from the run information (Run info);
     # without it the axis falls back to mL and says so.
-    function apply_xmode!()
+    apply_xmode!() = batch(_apply_xmode!)
+    function _apply_xmode!()
         sel = xmenu.selection[]
         cv = column_volume(run_info(events_obs[]))
         xs = sel == "Plot vs time" ? 0.0 : sel == "Plot vs volume" || cv == 0 ? 1.0 : cv
@@ -795,8 +820,10 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
                 strokecolor=(col, 0.6), strokewidth=1, cornerradius=4,
                 padding=(6, 6, 3, 3), halign=:left)
             on(btn.clicks) do _
-                highlighted[] = highlighted[] === key ? nothing : key
-                style_legend!()
+                batch() do
+                    highlighted[] = highlighted[] === key ? nothing : key
+                    style_legend!()
+                end
             end
             push!(legend_btns, key => btn)
         end
@@ -836,7 +863,8 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
 
     gap0 = left.addedrowgaps[1]   # the layout's normal gap between panels
 
-    function refresh_panels!()
+    refresh_panels!() = batch(_refresh_panels!)
+    function _refresh_panels!()
         ov = overlay[]
         visible = Axis[]
         setpanel!(ax_uv, 1, !ov)
@@ -872,10 +900,12 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
         on(_ -> refresh_panels!(), tg.checked)
     end
     on(ov_btn.clicks) do _
-        overlay[] = !overlay[]
-        ov_btn.label = overlay[] ? "Stacked" : "Overlay"
-        refresh_panels!()
-        tg_follow.checked[] && rescale!()
+        batch() do
+            overlay[] = !overlay[]
+            ov_btn.label = overlay[] ? "Stacked" : "Overlay"
+            refresh_panels!()
+            tg_follow.checked[] && rescale!()
+        end
     end
     refresh_panels!()
 
@@ -966,7 +996,8 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
     end_btn = Button(slider_row[1, 3]; label=viewer ? "End" : "Live", fontsize=13)
     colgap!(slider_row, 10)
 
-    function update_shown!()
+    update_shown!() = batch(_update_shown!)
+    function _update_shown!()
         td = app.trend_data[]
         i = clamp(sel_slider.value[], 1, max(1, length(td)))
         p = isempty(td) ? nothing : td[i]
@@ -1011,8 +1042,6 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
             [_trend_x(td[clamp($(sel_slider.value), 1, length(td))], $xscale)]
     end
     for ax in plot_axes
-        vlines!(ax, marker_x; color=(ui().text, 0.6), linestyle=:dash, linewidth=1.5,
-            xautolimits=false, yautolimits=false)
         # Alt- or Shift-click jumps the slider to the nearest data point.
         register_interaction!(ax, :inspect_moment) do event, _
             event isa MouseEvent && event.type == MouseEventTypes.leftclick || return Consume(false)
@@ -1100,13 +1129,36 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
 
     # ── Hover readout: values under the mouse in every panel ──────────────────
     hover_x = Observable(Float32[])
-    tips = Dict{Any,Any}()
-    for ax in plot_axes
-        vlines!(ax, hover_x; color=(pal.muted, 0.6), linewidth=1, xautolimits=false, yautolimits=false)
-        tips[ax] = tooltip!(ax, Point2f(0, 0); text="", visible=false, fontsize=FS_SMALL + 1,
-            backgroundcolor=pal.panel, textcolor=pal.text, outline_color=pal.border,
-            outline_linewidth=1, placement=:right, triangle_size=6)
+
+    # ── Top layer: the marker and hover lines and the tooltip, drawn once over all
+    # panels (in pixels) instead of once per panel: fewer plot objects. ─────────
+    top = Scene(fig.scene; camera=campixel!, clear=false)
+    geometry = Observable(0)             # bumped when the panels move or the x range changes
+    for a in plot_axes
+        on(_ -> (geometry[] += 1), a.scene.viewport)
     end
+    on(_ -> (geometry[] += 1), ax_uv.finallimits)
+    # Vertical lines at data x through all visible panels, as pixel segments.
+    function column_lines(xs)
+        vis = [a for a in plot_axes if a.leftspinevisible[]]
+        pts = Point2f[]
+        (isempty(xs) || isempty(vis)) && return pts
+        l, vp = vis[1].finallimits[], vis[1].scene.viewport[]
+        ylo = minimum(a.scene.viewport[].origin[2] for a in vis)
+        yhi = maximum(a.scene.viewport[].origin[2] + a.scene.viewport[].widths[2] for a in vis)
+        for x in xs
+            l.origin[1] <= x <= l.origin[1] + l.widths[1] || continue
+            px = vp.origin[1] + (x - l.origin[1]) / l.widths[1] * vp.widths[1]
+            push!(pts, Point2f(px, ylo), Point2f(px, yhi))
+        end
+        return pts
+    end
+    linesegments!(top, @lift(($geometry; column_lines($marker_x))); color=(pal.text, 0.6),
+        linestyle=:dash, linewidth=1.5)
+    linesegments!(top, @lift(($geometry; column_lines($hover_x))); color=(pal.muted, 0.6), linewidth=1)
+    tip = tooltip!(top, Point2f(0, 0); text="", visible=false, fontsize=FS_SMALL + 1,
+        backgroundcolor=pal.panel, textcolor=pal.text, outline_color=pal.border,
+        outline_linewidth=1, placement=:right, triangle_size=6)
     function hover!(ax, x, y)
         td = app.trend_data[]
         isempty(td) && return
@@ -1115,19 +1167,17 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
         i > 1 && abs(_trend_x(td[i-1], xs) - x) < abs(_trend_x(td[i], xs) - x) && (i -= 1)
         p = td[i]
         hover_x[] = [_trend_x(p, xs)]
-        tip = tips[ax]
-        tip[1][] = Point2f(x, y)
+        mp = events(fig).mouseposition[]
+        tip[1][] = Point2f(mp[1], mp[2])
         tip.text[] = @sprintf("%.2f min · %.3f mL\nUV %.4f AU   %%B %.1f\nCond %.2f mS/cm   pH %.2f\nPressure %.3f MPa",
             p.cum_time_ms / 60_000, p.cum_vol_mL, p.uv, p.pctb, p.cond_mScm, p.ph, p.pres_MPa)
         tip.placement[] = x > (ax.finallimits[].origin[1] + ax.finallimits[].widths[1] / 2) ? :left : :right
-        for (a, t) in tips
-            t.visible[] == (a === ax) || (t.visible[] = a === ax)
-        end
+        tip.visible[] || (tip.visible[] = true)
     end
     function unhover!()
         isempty(hover_x[]) && return
         hover_x[] = Float32[]
-        foreach(t -> t.visible[] && (t.visible[] = false), values(tips))
+        tip.visible[] && (tip.visible[] = false)
     end
     on(events(fig).mouseposition) do _
         ax = findfirst(a -> a.leftspinevisible[] && is_mouseinside(a.scene), collect(plot_axes))
@@ -1144,6 +1194,7 @@ function build_gui(app::AppState; viewer::Bool=false, topbar=nothing,
     set_close_to!(sel_slider, length(app.trend_data[]))
     update_shown!()
 
+    finish_layout!(fig)
     return fig
 end
 
@@ -1340,18 +1391,28 @@ function _draw_flow_schematic!(ax, state::Observable{InstrumentState},
     # Boxes grow to fit their label with a margin (≈0.16 data units per character).
     fitw(label, w) = max(w, 0.16 * length(label) + 0.55)
     box_h = 0.86
-    function node!(cx, cy, w, h, label; color=pal.node, textcolor=pal.node_text, fontsize=10)
-        poly!(ax, rrect(cx, cy, fitw(label, w), max(h, box_h)); color=color,
-            strokecolor=pal.border, strokewidth=1.2)
-        text!(ax, cx, cy; text=label, fontsize=fontsize, align=(:center, :center), font=:bold,
-            color=textcolor)
+    # Static boxes and labels are collected and drawn as one polygon plot and one
+    # text plot: few plot objects keep every frame and every new page cheap.
+    node_shapes, node_colors = Vector{Point2f}[], RGBf[]
+    label_texts, label_pos = String[], Point2f[]
+    label!(x, y, text) = (push!(label_texts, text); push!(label_pos, Point2f(x, y)))
+    function node!(cx, cy, w, h, label; color=pal.node)
+        push!(node_shapes, rrect(cx, cy, fitw(label, w), max(h, box_h)))
+        push!(node_colors, RGBf(color))
+        label!(cx, cy, label)
     end
     diamond(cx, cy, w, h) = Point2f[(cx, cy + h/2), (cx + w/2, cy), (cx, cy - h/2), (cx - w/2, cy)]
 
-    # Pipes are drawn only while liquid flows through them (see on(state) below).
-    pipe!(xs, ys; color=pal.pipe, lw=3.2) =
-        lines!(ax, xs, ys; color=color, linewidth=lw, linecap=:round, visible=false)
-    setvisible!(ln, active) = (ln.visible[] = active)
+    # Pipes are drawn only while liquid flows through them: each pipe is a record
+    # here, and the active ones are drawn together as one segments plot (on(state)).
+    pipes = Dict{Symbol,Any}[]
+    function pipe!(xs, ys; color=pal.pipe, lw=3.2)
+        pp = Dict{Symbol,Any}(:pts => Point2f.(xs, ys), :color => RGBAf(color), :lw => Float32(lw),
+            :visible => false, :alpha => 1.0)
+        push!(pipes, pp)
+        return pp
+    end
+    setvisible!(pp, active) = (pp[:visible] = active)
 
     # ── Node coordinates (staggered vertically for readability) ─────────────
     x_l, x_c, x_r = 1.3, 4.2, 7.1
@@ -1399,20 +1460,25 @@ function _draw_flow_schematic!(ax, state::Observable{InstrumentState},
     ln_uv_to_out = pipe!([x_c, x_c], [y_uv - 0.42, y_out + 0.40])
     ln_out_waste = pipe!([x_c, x_l], [y_out, y_bottom]; color=pal.muted)
     ln_out_frac = pipe!([x_c, x_frac], [y_out, y_bottom]; color=pal.frac)
+    pipe_data = Observable((Point2f[], RGBAf[], Float32[]))
+    linesegments!(ax, @lift($pipe_data[1]); color=@lift($pipe_data[2]), linewidth=@lift($pipe_data[3]),
+        linecap=:round)
 
     # ── Nodes ────────────────────────────────────────────────────────────────
-    port_polys = [poly!(ax, rrect(port_x[i], y_port, 0.50, 0.48; rx=0.08, ry=0.10);
-        color=pal.node, strokecolor=pal.border, strokewidth=1.2) for i in 1:n_ports]
-    port_txt = [text!(ax, port_x[i], y_port; text=string(i), fontsize=10,
-        align=(:center, :center), font=:bold, color=pal.node_text) for i in 1:n_ports]
-    text!(ax, port_x[1], y_port + 0.30; text="A", fontsize=9, align=(:center, :bottom), color=pal.muted)
-    text!(ax, port_x[end], y_port + 0.30; text="Sample", fontsize=9, align=(:center, :bottom),
-        color=pal.muted)
+    # The 8 ports: one polygon plot and one text plot, coloured per port.
+    port_fill = Observable(fill(RGBf(pal.node), n_ports))
+    port_stroke = Observable(fill(RGBf(pal.border), n_ports))
+    port_tcol = Observable(fill(RGBf(pal.node_text), n_ports))
+    poly!(ax, [rrect(port_x[i], y_port, 0.50, 0.48; rx=0.08, ry=0.10) for i in 1:n_ports];
+        color=port_fill, strokecolor=port_stroke, strokewidth=1.2)
+    text!(ax, Point2f.(port_x, y_port); text=string.(1:n_ports), fontsize=10,
+        align=(:center, :center), font=:bold, color=port_tcol)
+    text!(ax, [Point2f(port_x[1], y_port + 0.30), Point2f(port_x[end], y_port + 0.30)];
+        text=["A", "Sample"], fontsize=9, align=(:center, :bottom), color=pal.muted)
     # The A side of the mixer: fed by the buffer valve, coloured by its active port.
     vlv_poly = poly!(ax, rrect(x_vlv, y_buf, fitw("Buffer A", 1.3), box_h); color=tint(pal.buf_a),
         strokecolor=pal.buf_a, strokewidth=1.5)
-    text!(ax, x_vlv, y_buf; text="Buffer A", fontsize=10,
-        align=(:center, :center), font=:bold, color=pal.node_text)
+    label!(x_vlv, y_buf, "Buffer A")
     node!(x_frac, y_buf, 1.30, 0.62, "Buffer B"; color=tint(pal.buf_b, 0.35))
     inj_poly = poly!(ax, diamond(x_c, y_inj, 2.3, 1.15); color=pal.node, strokecolor=pal.border,
         strokewidth=1.5)
@@ -1426,6 +1492,10 @@ function _draw_flow_schematic!(ax, state::Observable{InstrumentState},
     node!(x_l, y_bottom, 1.30, 0.62, "Waste")
     node!(x_r, y_waste_loop, 1.30, 0.62, "Waste")
     node!(x_l, y_waste_inj, 1.30, 0.62, "Waste")
+    label!(x_c, y_out, "Out")
+    poly!(ax, node_shapes; color=node_colors, strokecolor=pal.border, strokewidth=1.2)
+    text!(ax, label_pos; text=label_texts, fontsize=10, align=(:center, :center), font=:bold,
+        color=pal.node_text)
 
     # ── MIXER — colour blends the A side (active port) with buffer B by %B ──
     mixer_color = @lift begin
@@ -1443,8 +1513,6 @@ function _draw_flow_schematic!(ax, state::Observable{InstrumentState},
 
     inj_txt = text!(ax, x_c, y_inj; text="LOAD", fontsize=10,
         align=(:center, :center), font=:bold, color=pal.node_text)
-    text!(ax, x_c, y_out; text="Out", fontsize=10,
-        align=(:center, :center), font=:bold, color=pal.node_text)
     out_txt = text!(ax, x_c, y_out - 1.0; text="TO WASTE", fontsize=9,
         align=(:center, :center), font=:bold, color=pal.muted)
 
@@ -1461,15 +1529,14 @@ function _draw_flow_schematic!(ax, state::Observable{InstrumentState},
         port = s.buffer_port
         pcol = port_color(port)
         alpha = s.buffer_port_known ? 1.0 : 0.45
+        port_fill[] = [i == port ? tint(pcol, alpha) : RGBf(pal.node) for i in 1:n_ports]
+        port_stroke[] = [i == port ? RGBf(pcol) : RGBf(pal.border) for i in 1:n_ports]
+        port_tcol[] = [i == port && s.buffer_port_known ? RGBf(1, 1, 1) : RGBf(pal.node_text) for i in 1:n_ports]
         for i in 1:n_ports
-            active = i == port
-            port_polys[i].color[] = active ? tint(pcol, alpha) : pal.node
-            port_polys[i].strokecolor[] = active ? pcol : pal.border
-            port_txt[i].color[] = active && s.buffer_port_known ? RGBf(1, 1, 1) : pal.node_text
-            setvisible!(ln_ports[i], has_known_path && active)
-            ln_ports[i].alpha[] = alpha
+            setvisible!(ln_ports[i], has_known_path && i == port)
+            ln_ports[i][:alpha] = alpha
         end
-        ln_buf_a.color[] = RGBAf(pcol.r, pcol.g, pcol.b, alpha)
+        ln_buf_a[:color] = RGBAf(pcol.r, pcol.g, pcol.b, alpha)
         vlv_poly.color[] = tint(pcol, 0.25 * alpha)
         vlv_poly.strokecolor[] = tint(pcol, alpha)
         setvisible!(ln_buf_b, has_known_path)
@@ -1498,6 +1565,12 @@ function _draw_flow_schematic!(ax, state::Observable{InstrumentState},
         out_col = out_to_frac ? pal.frac : pal.muted
         out_poly.color[] = tint(out_col)
         out_poly.strokecolor[] = out_col
+
+        # all active pipes in one segments plot (two points per pipe)
+        active = filter(pp -> pp[:visible], pipes)
+        pipe_data[] = (reduce(vcat, (pp[:pts] for pp in active); init=Point2f[]),
+            reduce(vcat, (fill(RGBAf(pp[:color], pp[:alpha] * Makie.alpha(pp[:color])), 2) for pp in active); init=RGBAf[]),
+            reduce(vcat, (fill(pp[:lw], 2) for pp in active); init=Float32[]))
 
         inj_txt.text[] = _inject_label(s.inject_value)
         out_txt.text[] = is_unk ? "PATH UNKNOWN" :
