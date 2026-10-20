@@ -69,6 +69,103 @@ event(t, kind, text) = A.AktaEvent(t * 60_000, t / 2, kind, text)
         A.PENDING_METHOD_EVENT[] = nothing
     end
 
+    @testset "method text codec" begin
+        for s in ("Flow  0.5 #1 z{|}~ end", " "^61 * "x", "*"^65, "a b * c", "")
+            @test A.unescape_method_text(A.escape_method_text(Vector{UInt8}(s))) == Vector{UInt8}(s)
+        end
+        @test String(A.escape_method_text(Vector{UInt8}("Max  ,#3 z"))) == "Max|2,zy3 zz"
+        dump = A.unescape_method_text(Vector{UInt8}(METHOD_DUMP))
+        @test startswith(String(copy(dump)), "*"^65 * "\r\n** Method Dump\r\n")
+        @test A.parse_method_text(dump).breakpoints == A.parse_method_dump(Vector{UInt8}(METHOD_DUMP)).breakpoints
+    end
+
+    @testset "method store" begin
+        dir = mktempdir()
+        x = A.MethodTransfer()
+        handle(opc, data=UInt8[]) = A.handle_method_opc!(x, opc, Vector{UInt8}(data), dir)
+        @test isnothing(handle(A.OPC_TREND_DATA))
+
+        # The Akta saves a method as number 3, its text split over several messages.
+        raw = Vector{UInt8}(METHOD_DUMP)
+        @test isempty(handle(A.OPC_METHOD_SAVE_BEGIN, [0x03, 0x00]).replies)
+        for part in Iterators.partition(raw, 30)
+            handle(A.OPC_METHOD_LINE, collect(part))
+        end
+        r = handle(A.OPC_METHOD_SAVE_END)
+        @test r.replies == [(A.OPC_METHOD_SAVE_ACK, UInt8[0x01])]
+        file = A.method_path(dir, 3)
+        @test read(file) == A.unescape_method_text(raw)
+        @test !occursin("only one breakpoint", r.note)
+        # A single-breakpoint method is saved, with a warning: the Akta cannot load it back.
+        one_bp = replace(METHOD_DUMP, r"},2\|3,99999.9.*$" => "}")
+        handle(A.OPC_METHOD_SAVE_BEGIN, [0x04, 0x00]); handle(A.OPC_METHOD_LINE, Vector{UInt8}(one_bp))
+        r4 = handle(A.OPC_METHOD_SAVE_END)
+        @test r4.replies == [(A.OPC_METHOD_SAVE_ACK, UInt8[0x01])] && occursin("only one breakpoint", r4.note)
+        rm(A.method_path(dir, 4))
+        @test handle(A.OPC_METHOD_SAVE_END).replies == [(A.OPC_METHOD_SAVE_ACK, UInt8[0x00])]   # none open
+
+        # A dump in between is returned for decoding, not saved.
+        handle(A.OPC_METHOD_DUMP_BEGIN)
+        handle(A.OPC_METHOD_LINE, raw)
+        @test handle(A.OPC_METHOD_DUMP_END, [0x00]).dump == raw
+
+        # Listing: ten numbers from the start, up or down, 0xFFFF for empty slots.
+        long = "Method Type        ," * "Long name with a z and #, "^3
+        write(A.method_path(dir, 5), "*****\r\n" * long * "\r\n\r\n,1   ,0.0\r\n")
+        write(A.method_path(dir, 12), "x\n")
+        write(joinpath(dir, "PrimeMeth_tmp.txt"), "x")
+        @test A.stored_methods(dir) == [3, 5, 12]
+        nums(r) = [A._u16(r.replies[1][2], i) for i in 1:2:20]
+        r = handle(A.OPC_METHOD_LIST, [0x01, 0x00, 0x01])
+        @test r.replies[1][1] == A.OPC_METHOD_LIST_REPLY && length(r.replies[1][2]) == 20
+        @test nums(r) == [3, 5, 12, fill(0xffff, 7)...]
+        @test nums(handle(A.OPC_METHOD_LIST, [0x05, 0x00, 0x00])) == [5, 3, fill(0xffff, 8)...]
+        @test nums(handle(A.OPC_METHOD_LIST, [0x00, 0x00, 0x01])) == fill(0xffff, 10)
+
+        # Loading: 0x2013, the lines (long ones in 34-character parts), 0x2014 [0].
+        r = handle(A.OPC_METHOD_LOAD, [0x05, 0x00])
+        @test r.replies[1] == (A.OPC_METHOD_LOAD_BEGIN, UInt8[])
+        @test r.replies[end] == (A.OPC_METHOD_LOAD_END, UInt8[0x00])
+        body = r.replies[2:end-1]
+        @test all(length(d) <= A.METHOD_CHUNK for (_, d) in body)
+        @test [o for (o, _) in body] == [A.OPC_METHOD_LINE; A.OPC_METHOD_LINE_BEGIN;
+            fill(A.OPC_METHOD_LINE_CONT, length(body) - 4); A.OPC_METHOD_LINE_END; A.OPC_METHOD_LINE]
+        lines = String[]
+        for (o, d) in body
+            o in (A.OPC_METHOD_LINE, A.OPC_METHOD_LINE_BEGIN) && push!(lines, "")
+            lines[end] *= String(copy(d))
+        end
+        @test [String(A.unescape_method_text(Vector{UInt8}(l))) for l in lines] == ["*****", long, ",1   ,0.0"]
+        for (o, d) in r.replies          # every message survives the link-layer encoding
+            @test A.decode_opc_payload(A.encode_opc_payload(o, d)) == [(o, d)]
+        end
+        @test handle(A.OPC_METHOD_LOAD, [0x07, 0x00]).replies == [(A.OPC_METHOD_LOAD_END, UInt8[0x01])]
+        write(A.method_path(dir, 13), "ok\r\n" * "x"^100 * "\r\n")
+        @test last(handle(A.OPC_METHOD_LOAD, [0x0d, 0x00]).replies) == (A.OPC_METHOD_LOAD_END, UInt8[0x02])
+
+        # Exists and delete; deleted and overwritten files are kept in old/.
+        @test handle(A.OPC_METHOD_EXISTS, [0x0c, 0x00]).replies == [(A.OPC_METHOD_EXISTS_REPLY, UInt8[0x01])]
+        @test handle(A.OPC_METHOD_DELETE, [0x0c, 0x00]).replies == [(A.OPC_METHOD_DELETE_REPLY, UInt8[0x01])]
+        @test handle(A.OPC_METHOD_EXISTS, [0x0c, 0x00]).replies == [(A.OPC_METHOD_EXISTS_REPLY, UInt8[0x00])]
+        @test handle(A.OPC_METHOD_DELETE, [0x0c, 0x00]).replies == [(A.OPC_METHOD_DELETE_REPLY, UInt8[0x00])]
+        handle(A.OPC_METHOD_SAVE_BEGIN, [0x03, 0x00]); handle(A.OPC_METHOD_LINE, b"new}"); handle(A.OPC_METHOD_SAVE_END)
+        @test read(file, String) == "new\r\n"
+        @test length(readdir(joinpath(dir, "old"))) == 2
+
+        # End to end: a list request in a frame from the Akta is answered from the methods folder.
+        A.METHOD_DIR[] = dir
+        frame = A.build_i_frame(A.encode_opc_payload(A.OPC_METHOD_LIST, UInt8[0x01, 0x00, 0x01]), 0x01, 0x00)
+        frame[2] = A.AKTA_ADDR
+        frame[end-1] = A.compute_checksum(frame, 2, length(frame) - 3)
+        @test A.validate_rx_frame(frame, length(frame))
+        app = A.AppState(); app.csv_io = devnull
+        tx = Channel{Tuple{UInt16,Vector{UInt8}}}(Inf)
+        A.parse_rx_data_frame(frame, length(frame), tx, A.LinkState(), app, f -> f())
+        opc, data = take!(tx)
+        @test opc == A.OPC_METHOD_LIST_REPLY && A._u16(data) == 3
+        A.METHOD_DIR[] = ""
+    end
+
     @testset "valve log messages" begin
         s = A.InstrumentState()
         @test !s.buffer_port_known && s.buffer_port == 1          # assumed until reported

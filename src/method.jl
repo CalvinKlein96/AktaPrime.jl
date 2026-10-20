@@ -2,11 +2,12 @@
 #
 # Decoder for the method dump the ÄKTAprime sends just before a run starts
 # (OPC 0x2007, content in 0x8008–0x8011, closed by 0x2008). The dump is a
-# printer-formatted text report:
-#   }     end of line
-#   |c    column padding of (c - '0') spaces; separates fields
-#   {x    print formatting (headings, rules); carries no data
-#   zz    a literal 'z'
+# printer-formatted text report, escaped like all method text (methodstore.jl);
+# decoded it reads
+#   ** Method Settings
+#   Method base        ,ml
+#   Brkp Volume   Conc Flow  Frac   Buff Inj    Peak   Autozero Eventmark
+#   ,1   ,0.0     ,0   ,0.5  ,0.0   ,8   ,Load  ,0     ,N       ,N
 # It holds a "Method Settings" block of `name ,value` lines and a breakpoint
 # table with the columns Brkp, Volume (mL), Conc (%B), Flow (mL/min), Frac (mL),
 # Buff (buffer valve port), Inj (injection valve), Peak (mAU/min), Autozero and
@@ -18,23 +19,25 @@ struct MethodDump
     breakpoints::Vector{Dict{String,String}}
 end
 
-const _PADDING = r"\|."
+# A method dump as the Akta sends it (escaped).
+parse_method_dump(raw::AbstractVector{UInt8})::MethodDump = parse_method_text(unescape_method_text(raw))
 
-function parse_method_dump(raw::AbstractVector{UInt8})::MethodDump
-    text = replace(String(copy(raw)), "zz" => "z")
+# Method text as stored in a PrimeMeth_NNN.txt file.
+function parse_method_text(bytes::AbstractVector{UInt8})::MethodDump
     settings = Pair{String,String}[]
     columns = String[]
     breakpoints = Dict{String,String}[]
-    for line in split(text, '}')
-        (isempty(line) || startswith(line, '{')) && continue   # formatting / headings
+    for line in split(String(copy(bytes)), r"\r\n|\r|\n")
+        line = rstrip(line)
+        (isempty(strip(line)) || startswith(line, '*')) && continue   # rules and headings
         if startswith(line, "Brkp")
-            columns = split(replace(line, _PADDING => " "))
+            columns = split(line)
         elseif startswith(line, ',')
             # Each value is prefixed by ','; padding before it is optional ("99999.9 ,0").
-            values = strip.(split(replace(line, _PADDING => ""), ',')[2:end])
+            values = strip.(split(line, ',')[2:end])
             length(values) == length(columns) && push!(breakpoints, Dict(zip(columns, values)))
         elseif occursin(',', line)
-            name, value = split(replace(line, _PADDING => " "), ','; limit=2)
+            name, value = split(line, ','; limit=2)
             push!(settings, strip(name) => strip(value))
         end
     end

@@ -313,8 +313,10 @@ function _settings_figure(ws::Workspace, topbar)::Figure
             (isempty(dir) || dir == s.data_dir) && return
             s.data_dir = dir
             acq.app.log_dir = data_dir(s)
+            METHOD_DIR[] = method_dir(acq.app.log_dir)
             folder.text = acq.app.log_dir
-            changed!("Data folder set to $(acq.app.log_dir); the next log file goes there.")
+            changed!("Data folder set to $(acq.app.log_dir); the next log file goes there, " *
+                     "and the Akta's methods are stored in $(METHOD_DIR[]).")
         end
     end
     for (name, cb) in panel_boxes

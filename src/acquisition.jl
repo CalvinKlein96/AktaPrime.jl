@@ -45,6 +45,7 @@ function start!(acq::Acquisition)
     VOLUME_UNIT_UL[] = s.volume_unit_uL
     app.log_prefix = s.log_prefix
     app.log_dir = data_dir(s)
+    METHOD_DIR[] = method_dir(app.log_dir)
     app.inst[] = InstrumentState()          # nothing is known about the new source yet
     resetrun!(app)
     app.log_filename = _unique_logname(app)
@@ -73,7 +74,9 @@ function start!(acq::Acquisition)
                 @error "Error handling Akta data" exception = (err, catch_backtrace())
             end
         end
-        tx_queue = Channel{Tuple{UInt16,Vector{UInt8}}}(32)
+        # Unbounded: the link thread queues a method load (dozens of messages) itself,
+        # so a bounded queue could fill up and block the only task that empties it.
+        tx_queue = Channel{Tuple{UInt16,Vector{UInt8}}}(Inf)
         task = Threads.@spawn :default Base.invokelatest(run_linklayer, tx_queue, acq.shutdown,
             app, s.serial_port; rx_actions, status=acq.status)
         # Once the link has stopped, let the consumer finish what is still queued.

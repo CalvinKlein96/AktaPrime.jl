@@ -75,6 +75,17 @@ At the start of each run the instrument sends its method to the PC; the app
 reads the starting state from it (for example which buffer-valve port is in
 use), and later valve moves are reported by the instrument as they happen.
 
+### Methods stored on the PC
+
+While the app is connected, the instrument can use the PC as its method
+store, as it did with PrimeView: save a method to the PC, and choose
+**Run Stored Method → PC** to load one. Methods are kept in the `methods`
+folder inside the data folder, one file per method number
+(`PrimeMeth_001.txt` … `PrimeMeth_999.txt`, the same files PrimeView used), so
+they can be copied between PCs. A method the instrument overwrites or deletes
+is moved to `methods/old/` rather than lost. Saves, loads and deletions are
+recorded in the run log.
+
 ### Event marks
 
 To note something during a run ("sample loaded", "changed buffer bottle"), type

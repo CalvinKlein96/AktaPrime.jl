@@ -44,17 +44,30 @@ const OPC_RUN_STATE = UInt16(0x2003)
 const OPC_INJECT = UInt16(0x2004)
 const OPC_TUBEFEED = UInt16(0x2005)
 const OPC_STEP_TIME_VOL = UInt16(0x2006)
-const OPC_METHOD_DATA_A = UInt16(0x2007)
-const OPC_METHOD_DATA_B = UInt16(0x2008)
+# Method transfers (methodstore.jl): dump before a run, save to and load from the PC
+const OPC_METHOD_DUMP_BEGIN = UInt16(0x2007)
+const OPC_METHOD_DUMP_END = UInt16(0x2008)
+const OPC_METHOD_SAVE_BEGIN = UInt16(0x2009)
+const OPC_METHOD_SAVE_END = UInt16(0x2010)
+const OPC_METHOD_SAVE_ACK = UInt16(0x2011)
+const OPC_METHOD_LOAD = UInt16(0x2012)
+const OPC_METHOD_LOAD_BEGIN = UInt16(0x2013)
+const OPC_METHOD_LOAD_END = UInt16(0x2014)
+const OPC_METHOD_LIST = UInt16(0x2015)
+const OPC_METHOD_LIST_REPLY = UInt16(0x2016)
+const OPC_METHOD_DELETE = UInt16(0x2017)
+const OPC_METHOD_DELETE_REPLY = UInt16(0x2018)
+const OPC_METHOD_EXISTS = UInt16(0x2019)
+const OPC_METHOD_EXISTS_REPLY = UInt16(0x2020)
 const OPC_DEBUG_MSG = UInt16(0x8003)
 const OPC_LOG_SINGLE = UInt16(0x8004)
 const OPC_LOG_BEGIN = UInt16(0x8005)
 const OPC_LOG_CONT = UInt16(0x8006)
 const OPC_LOG_END = UInt16(0x8007)
-const OPC_METHOD_DATA_C = UInt16(0x8008)
-const OPC_METHOD_DATA_D = UInt16(0x8009)
-const OPC_METHOD_DATA_E = UInt16(0x8010)
-const OPC_METHOD_DATA_F = UInt16(0x8011)
+const OPC_METHOD_LINE = UInt16(0x8008)         # a whole line of method text
+const OPC_METHOD_LINE_BEGIN = UInt16(0x8009)   # a long line: first part,
+const OPC_METHOD_LINE_CONT = UInt16(0x8010)    # middle parts,
+const OPC_METHOD_LINE_END = UInt16(0x8011)     # last part
 const OPC_WATCHDOG = UInt16(0x3001)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -69,8 +82,9 @@ mutable struct LinkState
     driver_enabled::Bool
     silent::Bool
     probe_ms::Int
+    method::MethodTransfer   # method dump or save in progress
 end
-LinkState() = LinkState(false, 0x00, 0x00, false, 0, false, false, 0)
+LinkState() = LinkState(false, 0x00, 0x00, false, 0, false, false, 0, MethodTransfer())
 
 # (Re)initialise the link after a connect handshake from the Akta.
 function _link_reset!(st::LinkState, tx_queue::Channel)
@@ -82,6 +96,7 @@ function _link_reset!(st::LinkState, tx_queue::Channel)
     st.silent = false
     st.connected = true
     st.driver_enabled = false
+    st.method = MethodTransfer()
     while isready(tx_queue)
         take!(tx_queue)
     end
@@ -458,45 +473,39 @@ end
 # Raw capture — material for decoding undocumented messages
 # ─────────────────────────────────────────────────────────────────────────────
 # Every received OPC except trend data and the watchdog is appended to the raw
-# log, and each method transfer (0x2007 … 0x2008) is saved as the instrument
-# sent it, unescaped, to <log>_method_N.met.
+# log, as are the method messages sent to the Akta (marked TX), and each method
+# dump is saved as the instrument sent it, still escaped, to <log>_method_N.met.
 const RAW_IO = Ref{Union{Nothing,IO}}(nothing)
-const METHOD_BUF = Ref{Union{Nothing,Vector{UInt8}}}(nothing)
 const METHOD_COUNT = Ref(0)
 
 _printable(data) = String(map(b -> 0x20 <= b <= 0x7e ? b : UInt8('.'), data))
 
-function _capture_opc(opc::UInt16, data::Vector{UInt8}, app::AppState)
+function _capture_opc(opc::UInt16, data::Vector{UInt8}; tx::Bool=false)
     io = RAW_IO[]
     if !isnothing(io) && opc != OPC_TREND_DATA && opc != OPC_WATCHDOG
-        println(io, Dates.format(now(), "HH:MM:SS.sss"), "  0x", string(opc, base=16, pad=4),
+        println(io, Dates.format(now(), "HH:MM:SS.sss"), tx ? "  TX 0x" : "  0x", string(opc, base=16, pad=4),
             "  n=", length(data), "  ", bytes2hex(data), "  |", _printable(data), "|")
         flush(io)
     end
+end
 
-    if opc == OPC_METHOD_DATA_A
-        METHOD_BUF[] = UInt8[]
-    elseif opc in (OPC_METHOD_DATA_C, OPC_METHOD_DATA_D, OPC_METHOD_DATA_E, OPC_METHOD_DATA_F)
-        isnothing(METHOD_BUF[]) && (METHOD_BUF[] = UInt8[])   # transfer seen without its 0x2007
-        append!(METHOD_BUF[], data)
-    elseif opc == OPC_METHOD_DATA_B && !isnothing(METHOD_BUF[])
-        if !isnothing(RAW_IO[])           # saved only with "Save raw instrument data" on
-            METHOD_COUNT[] += 1
-            path = replace(app.log_filename, r"\.csv$" => "_method_$(METHOD_COUNT[]).met")
-            write(path, METHOD_BUF[])
-            @info "Saved method transfer ($(length(METHOD_BUF[])) bytes) to $path"
-        end
-        try
-            apply_method_dump!(app, parse_method_dump(METHOD_BUF[]))
-        catch err
-            @warn "Could not decode method dump" exception = err
-        end
-        METHOD_BUF[] = nothing
+# A method dump has arrived (escaped text, see methodstore.jl).
+function _method_dump_received!(app::AppState, raw::Vector{UInt8})
+    if !isnothing(RAW_IO[])           # saved only with "Save raw instrument data" on
+        METHOD_COUNT[] += 1
+        path = replace(app.log_filename, r"\.csv$" => "_method_$(METHOD_COUNT[]).met")
+        write(path, raw)
+        @info "Saved method transfer ($(length(raw)) bytes) to $path"
+    end
+    try
+        apply_method_dump!(app, parse_method_dump(raw))
+    catch err
+        @warn "Could not decode method dump" exception = err
     end
 end
 
 function dispatch_rx_opc(opc::UInt16, data::Vector{UInt8}, tx_queue::Channel, app::AppState)
-    _capture_opc(opc, data, app)
+    _capture_opc(opc, data)
     if opc == OPC_PROG_NAME
         name = rstrip(String(copy(data[1:min(100, end)])), '\0')
         @info "Programme name: $name"
@@ -543,10 +552,9 @@ function dispatch_rx_opc(opc::UInt16, data::Vector{UInt8}, tx_queue::Channel, ap
     elseif opc == OPC_STEP_TIME_VOL
         _handle_step_time_vol(data, app)
 
-    elseif opc == OPC_METHOD_DATA_A || opc == OPC_METHOD_DATA_B ||
-           opc == OPC_METHOD_DATA_C || opc == OPC_METHOD_DATA_D ||
-           opc == OPC_METHOD_DATA_E || opc == OPC_METHOD_DATA_F
-        @info "Method data OPC 0x$(string(opc, base=16, pad=4)): $(length(data)) bytes"
+    elseif is_method_opc(opc)
+        # answered on the link thread (_method_opc!)
+        @debug "Method OPC 0x$(string(opc, base=16, pad=4)): $(length(data)) bytes"
 
     elseif opc == OPC_DEBUG_MSG
         _handle_debug_message(data, app)
@@ -579,7 +587,30 @@ function parse_rx_data_frame(frame::AbstractVector{UInt8}, len::Int,
             @info "Queued driver-enable (OPC 0x1001/0x01)"
         end
         post(() -> dispatch_rx_opc(opc, data, tx_queue, app))
+        is_method_opc(opc) && _method_opc!(st, opc, data, tx_queue, app, post)
     end
+end
+
+# Method store requests are answered here on the link thread, so the reply never
+# waits for a busy GUI (the Akta gives up after about 2 s); the run log and a
+# finished method dump are handled on the main thread.
+function _method_opc!(st::LinkState, opc::UInt16, data::Vector{UInt8}, tx_queue::Channel,
+    app::AppState, post)
+    action = try
+        handle_method_opc!(st.method, opc, data, METHOD_DIR[])
+    catch err
+        @error "Error handling method OPC 0x$(string(opc, base=16, pad=4))" exception = (err, catch_backtrace())
+        nothing
+    end
+    isnothing(action) && return
+    foreach(m -> put!(tx_queue, m), action.replies)
+    replies, note, dump = action.replies, action.note, action.dump
+    isempty(replies) || post(() -> foreach(((o, d),) -> _capture_opc(o, d; tx=true), replies))
+    if !isnothing(note)
+        @info note
+        post(() -> push_event!(app, EVT_LOG, note))
+    end
+    isnothing(dump) || post(() -> _method_dump_received!(app, dump))
 end
 
 # On its own thread the link must sleep with OS sleeps: Julia's `sleep` is woken

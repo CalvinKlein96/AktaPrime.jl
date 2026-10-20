@@ -8,3 +8,5 @@ sysimage/*.so
 sysimage/*.dll
 sysimage/*.dylib
 LocalPreferences.toml
+/UNICORN
+/methods
