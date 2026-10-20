@@ -19,9 +19,10 @@ mutable struct Workspace
     tabs_changed::Observable{Int}
     notice::Observable{String}   # last error of a menu action, shown in the top bar
     settings_page::Union{Nothing,Page}   # built once (ahead of time) and reused
+    editor_only::Bool            # only the method editor (--methods): no menu buttons
 end
-Workspace(acq::Acquisition) =
-    Workspace(acq, nothing, Page[], nothing, Observable(0), Observable(""), nothing)
+Workspace(acq::Acquisition; editor_only::Bool=false) =
+    Workspace(acq, nothing, Page[], nothing, Observable(0), Observable(""), nothing, editor_only)
 
 # Runs `f` after the current GUI callback returns: a tab button must not delete
 # itself, or replace the figure it belongs to, from inside its own click handler.
@@ -44,9 +45,12 @@ function _topbar(ws::Workspace, listeners::Vector{Any})
         tabs = GridLayout(bar[1, 1]; halign=:left)
         Label(bar[1, 2], ws.notice; halign=:right, fontsize=FS_BODY, color=ui().err,
             tellwidth=false)            # also pushes the menu buttons to the right edge
-        open_btn = Button(bar[1, 3]; label="Open run…", fontsize=13)
-        info_btn = Button(bar[1, 4]; label="Run info", fontsize=13)
-        set_btn = Button(bar[1, 5]; label="Settings", fontsize=13)
+        if !ws.editor_only
+            open_btn = Button(bar[1, 3]; label="Open run…", fontsize=13)
+            info_btn = Button(bar[1, 4]; label="Run info", fontsize=13)
+            meth_btn = Button(bar[1, 5]; label="Methods", fontsize=13)
+            set_btn = Button(bar[1, 6]; label="Settings", fontsize=13)
+        end
         colgap!(bar, 10)
 
         # Flat tabs: title (+ close ×) on the bar colour, the active one in bold
@@ -86,9 +90,11 @@ function _topbar(ws::Workspace, listeners::Vector{Any})
         push!(listeners, on(_ -> rebuild(), ws.tabs_changed))
         rebuild()
 
+        ws.editor_only && return
         on(_ -> _later(() -> open_run!(ws), ws), open_btn.clicks)
         on(_ -> _later(() -> open_settings!(ws), ws), set_btn.clicks)
         on(_ -> _later(() -> open_runinfo!(ws), ws), info_btn.clicks)
+        on(_ -> _later(() -> open_methods!(ws), ws), meth_btn.clicks)
     end
 end
 
@@ -314,6 +320,7 @@ function _settings_figure(ws::Workspace, topbar)::Figure
             s.data_dir = dir
             acq.app.log_dir = data_dir(s)
             METHOD_DIR[] = method_dir(acq.app.log_dir)
+            METHODS_CHANGED[] += 1
             folder.text = acq.app.log_dir
             changed!("Data folder set to $(acq.app.log_dir); the next log file goes there, " *
                      "and the Akta's methods are stored in $(METHOD_DIR[]).")

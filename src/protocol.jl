@@ -611,6 +611,10 @@ function _method_opc!(st::LinkState, opc::UInt16, data::Vector{UInt8}, tx_queue:
         post(() -> push_event!(app, EVT_LOG, note))
     end
     isnothing(dump) || post(() -> _method_dump_received!(app, dump))
+    if opc in (OPC_METHOD_SAVE_END, OPC_METHOD_DELETE, OPC_METHOD_LOAD)
+        loaded = opc == OPC_METHOD_LOAD && last(replies) == (OPC_METHOD_LOAD_END, UInt8[0x00]) ? _u16(data) : 0
+        post(() -> (loaded > 0 && (LAST_LOADED_METHOD[] = loaded); METHODS_CHANGED[] += 1))
+    end
 end
 
 # On its own thread the link must sleep with OS sleeps: Julia's `sleep` is woken

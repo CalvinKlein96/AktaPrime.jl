@@ -21,6 +21,7 @@ include("theme.jl")
 include("gui.jl")
 include("acquisition.jl")
 include("workspace.jl")
+include("methodeditor.jl")
 
 export main
 
@@ -221,6 +222,30 @@ function _run_live(serial_override::Union{Nothing,AbstractString}=nothing)
     end
 end
 
+# Only the method editor: no serial link and no log file, e.g. to prepare methods
+# away from the instrument (AktaPrime.sh --methods).
+function _run_method_editor()
+    global_logger(ConsoleLogger(stderr, Logging.Info))
+    delete!(ENV, "GTK_MODULES")
+    get!(ENV, "NO_AT_BRIDGE", "1")
+    settings = load_settings()
+    apply_theme!(settings.dark_mode)
+    METHOD_DIR[] = method_dir(data_dir(settings))
+    @info "Method editor — methods in $(METHOD_DIR[])"
+    ws = Workspace(Acquisition(AppState(), settings); editor_only=true)   # never started
+    GLMakie.activate!(; title="AktaPrime — Methods")
+    page = open_methods!(ws)
+    ws.screen = display(page.fig)
+    Base.exit_on_sigint(false)
+    try
+        while isopen(ws.screen)
+            sleep(0.05)
+        end
+    catch e
+        e isa InterruptException || rethrow()
+    end
+end
+
 function _print_banner(s::Settings)
     bar = "─"^64
     println()
@@ -273,6 +298,7 @@ function main()
 end
 
 function main(arg::AbstractString)
+    arg == "--methods" && return _run_method_editor()
     if _is_logfile_arg(arg)
         global_logger(ConsoleLogger(stderr, Logging.Info))
         _run_replay(arg)
@@ -287,7 +313,7 @@ function main(args::Vector{String})
     elseif length(args) == 1
         return main(args[1])
     end
-    @error "Usage: AktaPrime [serial_port|logfile.csv]"
+    @error "Usage: AktaPrime [serial_port|logfile.csv|--methods]"
     return
 end
 

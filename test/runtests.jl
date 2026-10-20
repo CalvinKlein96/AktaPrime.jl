@@ -122,6 +122,15 @@ event(t, kind, text) = A.AktaEvent(t * 60_000, t / 2, kind, text)
         @test nums(handle(A.OPC_METHOD_LIST, [0x05, 0x00, 0x00])) == [5, 3, fill(0xffff, 8)...]
         @test nums(handle(A.OPC_METHOD_LIST, [0x00, 0x00, 0x01])) == fill(0xffff, 10)
 
+        # Names from the editor stay on the PC (names.txt) and do not disturb the store.
+        A.set_method_name!(dir, 5, "HisTag elution, 5 ml")
+        A.set_method_name!(dir, 12, "  Wash  ")
+        @test A.method_names(dir) == Dict(5 => "HisTag elution, 5 ml", 12 => "Wash")
+        A.set_method_name!(dir, 12, "")
+        @test A.method_names(dir) == Dict(5 => "HisTag elution, 5 ml")
+        @test A.stored_methods(dir) == [3, 5, 12]
+        @test A.method_name_ok("Säule – Elution") && !A.method_name_ok("a\tb") && !A.method_name_ok("x"^61)
+
         # Loading: 0x2013, the lines (long ones in 34-character parts), 0x2014 [0].
         r = handle(A.OPC_METHOD_LOAD, [0x05, 0x00])
         @test r.replies[1] == (A.OPC_METHOD_LOAD_BEGIN, UInt8[])
@@ -164,6 +173,36 @@ event(t, kind, text) = A.AktaEvent(t * 60_000, t / 2, kind, text)
         opc, data = take!(tx)
         @test opc == A.OPC_METHOD_LIST_REPLY && A._u16(data) == 3
         A.METHOD_DIR[] = ""
+    end
+
+    @testset "method files" begin
+        # A file as the Akta writes it reads and writes back unchanged.
+        bytes = A.unescape_method_text(Vector{UInt8}(METHOD_DUMP))
+        m = A.read_method_file(bytes)
+        @test A.format_method_text(m) == bytes
+        @test A.setting(m, "Max pressure (kPa)") == "1000" && length(m.rows) == 2
+        @test m.rows[1] == ["0.0", "0", "0.5", "0.0", "8", "Load", "0", "N", "N"]
+        @test isempty(first(A.method_problems(m)))
+        @test A.read_method_file(A.format_method_text(A.new_method_file())) == A.new_method_file()
+        @test_throws ErrorException A.read_method_file(b"no method here")
+
+        # Values: what may be entered, and how it is written.
+        @test A.method_value_ok("Flow", "0,5") && A.normalize_value("Flow", "0,5") == "0.5"
+        @test A.normalize_value("Volume", "10") == "10.0" && A.normalize_value("Conc", "05") == "5"
+        @test A.normalize_value("Peak", "0.10") == "0.1" && A.normalize_value("Peak", "0") == "0"
+        @test !A.method_value_ok("Flow", "51") && !A.method_value_ok("Conc", "100.5")
+        @test !A.method_value_ok("Buff", "9") && !A.method_value_ok("Inj", "load")
+        @test !A.method_value_ok("Method Type", "a,b") && A.method_value_ok("Method Type", "-")
+
+        # Problems that stop the Akta loading a method.
+        one = A.copy(m); pop!(one.rows)
+        @test occursin("two breakpoints", only(first(A.method_problems(one))))
+        bad = A.copy(m); bad.rows[1][1] = "1.0"; bad.rows[2][1] = "0.5"; bad.rows[2][3] = "x"
+        msgs, cells = A.method_problems(bad)
+        @test (1, "Volume") in cells && (2, "Volume") in cells && (2, "Flow") in cells && length(msgs) == 3
+        # Saving normalises: 1 → 1.0 in the file.
+        m2 = A.copy(m); m2.rows[1][3] = "1"
+        @test occursin(",1.0  ,", String(A.format_method_text(A.normalize_method(m2))))
     end
 
     @testset "valve log messages" begin
@@ -248,6 +287,16 @@ event(t, kind, text) = A.AktaEvent(t * 60_000, t / 2, kind, text)
         @test A.build_gui(app; viewer=true, start_panels=["%B"]) isa A.Figure
         A.show_page!(ws, A.prepare_settings!(ws))
         A.open_runinfo!(ws)
-        @test [p.title for p in ws.pages] == ["Live", "Settings", "Run info"]
+        A.METHOD_DIR[] = mktempdir()
+        @test A.open_methods!(ws).fig isa A.Figure                       # no methods yet
+        @test [p.title for p in ws.pages] == ["Live", "Settings", "Run info", "Methods"]
+        A.close_page!(ws, ws.pages[end])
+        long = A.new_method_file()
+        foreach(i -> insert!(long.rows, 2, [string(i, ".0"); long.rows[1][2:end]]), 15:-1:1)
+        write(A.method_path(A.METHOD_DIR[], 7), A.format_method_text(long))   # more rows than shown at once
+        @test A.open_methods!(ws).fig isa A.Figure
+        editor = A.Workspace(acq; editor_only=true)
+        @test A.open_methods!(editor).fig isa A.Figure
+        A.METHOD_DIR[] = ""
     end
 end

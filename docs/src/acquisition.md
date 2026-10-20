@@ -86,6 +86,34 @@ they can be copied between PCs. A method the instrument overwrites or deletes
 is moved to `methods/old/` rather than lost. Saves, loads and deletions are
 recorded in the run log.
 
+### Method editor
+
+Click **Methods** in the top bar to see the stored methods and edit them. The
+list marks methods the instrument cannot load and the one it loaded last.
+
+- **Name**: give a method a name to find it in the list. Names stay on the PC
+  (in `methods/names.txt`) and are not sent to the instrument, which shows
+  methods by number only.
+- **Settings and breakpoints**: method and fraction base, pressure limit and
+  alarm, and per breakpoint the volume, %B, flow, fraction size, buffer port,
+  injection valve, peak threshold, autozero and event mark. Click a choice
+  (ml/min, Load/Inj/Waste, Y/N) to step through its options; **+** adds a
+  breakpoint below, **×** removes one.
+- **The last breakpoint is the end of the method**; 99999.9 runs until stopped.
+  A method needs at least two breakpoints, the first at 0.0, in increasing
+  order. Bad values are outlined in red and listed under the table; a method
+  is saved only when the instrument can load it.
+- **Save** writes the method under its number, **Save as** under another one
+  (replacing an existing number asks first), **Revert** discards changes.
+  **New**, **Duplicate** and **Delete** work on the list; replaced and deleted
+  versions are kept in `methods/old/`.
+- To run a saved method, choose **Run Stored Method → PC** and its number on
+  the instrument.
+
+To prepare methods without the instrument, start only the editor (no serial
+connection, no log file): `./AktaPrime.sh --methods`, or
+`julia --project=. -m AktaPrime --methods`.
+
 ### Event marks
 
 To note something during a run ("sample loaded", "changed buffer bottle"), type

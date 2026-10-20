@@ -27,6 +27,8 @@ any ordinary laptop.
   CSV file, together with its **run information** (sample, column, buffers).
 - **Reopen runs and export figures** — open earlier runs in their own tabs, and
   export plots to PDF for reports and publications.
+- **Method editor** — write methods on the PC; the instrument loads them with
+  *Run Stored Method → PC*, and saves its own methods there too.
 - **Settings** for serial port, data folder, volume unit (ÄKTAprime or
   ÄKTAprime plus), panels shown at start, dark mode and more.
 - **Demo mode** — explore the whole interface with simulated data, no instrument

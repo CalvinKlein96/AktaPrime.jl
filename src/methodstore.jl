@@ -33,6 +33,10 @@ const METHOD_NONE = 0xffff         # empty slot in a 0x2016 reply
 
 # The methods folder, set when acquisition starts (link thread reads it).
 const METHOD_DIR = Ref("")
+# Bumped (on the main thread) when the Akta saved, deleted or loaded a method or
+# the folder changed, so the Methods tab can update its list.
+const METHODS_CHANGED = Observable(0)
+const LAST_LOADED_METHOD = Ref(0)        # the method the Akta last loaded from the PC
 method_dir(data_folder::AbstractString) = joinpath(data_folder, "methods")
 method_path(dir::AbstractString, n::Integer) = joinpath(dir, @sprintf("%s%03d.txt", METHOD_FILE_PREFIX, n))
 
@@ -60,6 +64,39 @@ function find_method_file(dir::AbstractString, n::Integer)::Union{Nothing,String
         lowercase(f) == lowercase(basename(path)) && return joinpath(dir, f)
     end
     return nothing
+end
+
+# ── Method names ──────────────────────────────────────────────────────────────
+# Names given in the method editor stay on the PC: <methods folder>/names.txt,
+# one "NNN<tab>name" line per method. The instrument never sees them.
+
+const METHOD_NAMES_FILE = "names.txt"
+
+function method_names(dir::AbstractString)::Dict{Int,String}
+    names = Dict{Int,String}()
+    path = joinpath(dir, METHOD_NAMES_FILE)
+    isfile(path) || return names
+    for line in eachline(path)
+        m = match(r"^(\d{1,3})\t(.+)$", line)
+        isnothing(m) || (names[parse(Int, m[1])] = m[2])
+    end
+    return names
+end
+
+method_name_ok(s::AbstractString) = length(s) <= 60 && all(c -> isprint(c) && c != '\t', s)
+
+# Sets (or with "" removes) the name of method n.
+function set_method_name!(dir::AbstractString, n::Integer, name::AbstractString)
+    names = method_names(dir)
+    name = strip(name)
+    get(names, n, "") == name && return
+    isempty(name) ? delete!(names, n) : (names[n] = name)
+    mkpath(dir)
+    tmp, io = mktemp(dir)
+    println(io, "# Method names from the AktaPrime method editor; not sent to the instrument.")
+    foreach(k -> println(io, @sprintf("%03d", k), '\t', names[k]), sort!(collect(keys(names))))
+    close(io)
+    mv(tmp, joinpath(dir, METHOD_NAMES_FILE); force=true)
 end
 
 # ── Text codec ────────────────────────────────────────────────────────────────
@@ -169,8 +206,9 @@ end
 function save_method_file(dir::AbstractString, n::Integer, bytes::AbstractVector{UInt8})
     mkpath(dir)
     path = method_path(dir, n)
-    tmp = joinpath(dir, METHOD_FILE_PREFIX * "tmp.txt")
-    write(tmp, bytes)
+    tmp, io = mktemp(dir)      # unique: the editor and the Akta may save at the same moment
+    write(io, bytes)
+    close(io)
     existing = find_method_file(dir, n)
     isnothing(existing) || _retire_method_file(existing)
     mv(tmp, path; force=true)
