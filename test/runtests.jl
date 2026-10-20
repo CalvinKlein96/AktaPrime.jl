@@ -95,6 +95,7 @@ event(t, kind, text) = A.AktaEvent(t * 60_000, t / 2, kind, text)
         @test r.replies == [(A.OPC_METHOD_SAVE_ACK, UInt8[0x01])]
         file = A.method_path(dir, 3)
         @test read(file) == A.unescape_method_text(raw)
+        Sys.iswindows() || @test filemode(file) & 0o777 == 0o644      # readable by other users
         @test !occursin("only one breakpoint", r.note)
         # A single-breakpoint method is saved, with a warning: the Akta cannot load it back.
         one_bp = replace(METHOD_DUMP, r"},2\|3,99999.9.*$" => "}")

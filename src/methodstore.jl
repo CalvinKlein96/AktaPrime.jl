@@ -96,6 +96,7 @@ function set_method_name!(dir::AbstractString, n::Integer, name::AbstractString)
     println(io, "# Method names from the AktaPrime method editor; not sent to the instrument.")
     foreach(k -> println(io, @sprintf("%03d", k), '\t', names[k]), sort!(collect(keys(names))))
     close(io)
+    chmod(tmp, 0o644)
     mv(tmp, joinpath(dir, METHOD_NAMES_FILE); force=true)
 end
 
@@ -209,6 +210,7 @@ function save_method_file(dir::AbstractString, n::Integer, bytes::AbstractVector
     tmp, io = mktemp(dir)      # unique: the editor and the Akta may save at the same moment
     write(io, bytes)
     close(io)
+    chmod(tmp, 0o644)          # mktemp makes it private to the user
     existing = find_method_file(dir, n)
     isnothing(existing) || _retire_method_file(existing)
     mv(tmp, path; force=true)
